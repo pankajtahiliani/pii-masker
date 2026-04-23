@@ -20,7 +20,7 @@ import uuid
 import tempfile
 import threading
 import requests
-from flask import Flask, request, jsonify, send_file, send_from_directory
+from flask import Flask, request, jsonify, send_file, send_from_directory, Response
 from flask_cors import CORS
 from docx import Document
 import openpyxl
@@ -42,6 +42,16 @@ CORS(app)
 # Set LLM_MAX_CONCURRENT = --parallel value on the server (default 4 Mac, 8 GPU).
 _LLM_MAX_CONCURRENT = int(os.environ.get("LLM_MAX_CONCURRENT", "1"))  # dev default; prod: set LLM_MAX_CONCURRENT=8
 _LLM_SEM = threading.BoundedSemaphore(_LLM_MAX_CONCURRENT)
+
+# Persistent HTTP connection pool to llama-server — avoids TCP handshake on every request.
+# pool_maxsize = parallel slots + headroom for non-streaming calls running alongside streams.
+_LLAMA_SESSION = requests.Session()
+_LLAMA_SESSION.mount('http://', requests.adapters.HTTPAdapter(
+    pool_connections=4, pool_maxsize=_LLM_MAX_CONCURRENT + 2, max_retries=0,
+))
+_LLAMA_SESSION.mount('https://', requests.adapters.HTTPAdapter(
+    pool_connections=2, pool_maxsize=4, max_retries=0,
+))
 
 # Rate limiter: 12 artifact-gens/min/IP (1 full doc-set), 200/hr/IP
 if _HAS_LIMITER:
@@ -85,6 +95,18 @@ MAX_FILE_SIZE   = 50 * 1024 * 1024
 # Temp dir per-process would break download when worker that saved != worker that serves.
 UPLOAD_FOLDER   = os.environ.get("UPLOAD_FOLDER", "/tmp/pii_uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# ── Chat module ────────────────────────────────────────────────────────────────
+# In-memory conversation store: {session_id: [{role, content}, ...]}
+# Lost on server restart — intentional (privacy, no persistence needed).
+_CHAT_SESSIONS: dict = {}
+
+_CHAT_SYSTEM_PROMPT = (
+    "You are a helpful AI assistant for software teams. "
+    "Help with requirements analysis, effort estimation, user story writing, "
+    "risk analysis, Q&A, and any other software-related needs. "
+    "Be concise, structured, and practical in your responses."
+)
 
 # Single model alias — must match --alias set at llama-server startup.
 # Override via LLM_MODEL env var (e.g. LLM_MODEL=gemma3 for speed testing).
@@ -1299,6 +1321,70 @@ def _call_llm(model, prompt, timeout=None, options_override=None, format_json=Fa
                                   options_override=options_override, format_json=format_json)
 
 
+def _stream_llama_server(messages, model, timeout=120):
+    """Generator: yields text tokens from llama-server SSE stream (multi-turn messages)."""
+    payload = {
+        "model":       model,
+        "messages":    messages,
+        "max_tokens":  2048,
+        "temperature": 0.7,
+        "stream":      True,
+    }
+    with _LLAMA_SESSION.post(LLAMA_CHAT_URL, json=payload, stream=True, timeout=timeout) as r:
+        r.raise_for_status()
+        for line in r.iter_lines():
+            if not line:
+                continue
+            decoded = line.decode("utf-8") if isinstance(line, bytes) else line
+            if not decoded.startswith("data: "):
+                continue
+            data_str = decoded[6:].strip()
+            if data_str == "[DONE]":
+                return
+            try:
+                chunk = json.loads(data_str)
+                token = chunk["choices"][0]["delta"].get("content", "")
+                if token:
+                    yield token
+            except (KeyError, json.JSONDecodeError):
+                pass
+
+
+def _stream_openrouter(messages, timeout=120):
+    """Generator: yields text tokens from OpenRouter SSE stream (multi-turn messages)."""
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type":  "application/json",
+        "HTTP-Referer":  "http://localhost:5000",
+        "X-Title":       "Agile Suite — Chat",
+    }
+    payload = {
+        "model":       OPENROUTER_MODEL,
+        "messages":    messages,
+        "max_tokens":  2048,
+        "temperature": 0.7,
+        "stream":      True,
+    }
+    with requests.post(OPENROUTER_URL, headers=headers, json=payload, stream=True, timeout=timeout) as r:
+        r.raise_for_status()
+        for line in r.iter_lines():
+            if not line:
+                continue
+            decoded = line.decode("utf-8") if isinstance(line, bytes) else line
+            if not decoded.startswith("data: "):
+                continue
+            data_str = decoded[6:].strip()
+            if data_str == "[DONE]":
+                return
+            try:
+                chunk = json.loads(data_str)
+                token = chunk["choices"][0]["delta"].get("content", "")
+                if token:
+                    yield token
+            except (KeyError, json.JSONDecodeError):
+                pass
+
+
 def _call_llama_server(model, prompt, timeout=None, options_override=None, format_json=False):
     """
     Call llama-server via OpenAI-compatible /v1/chat/completions.
@@ -1665,6 +1751,137 @@ def generate_docs():
             documents[key] = {"_raw": str(e)}
 
     return jsonify({"success": True, "documents": documents, "model": model})
+
+
+# ── Chat routes ────────────────────────────────────────────────────────────────
+
+@app.route('/chat')
+def chat_page():
+    return send_from_directory('static', 'chat.html')
+
+
+@app.route('/api/chat/stream', methods=['POST'])
+@rate_limit("20 per minute; 200 per hour")
+def chat_stream():
+    data       = request.json or {}
+    session_id = data.get('session_id', '').strip()
+    message    = data.get('message', '').strip()
+
+    if not message:
+        return jsonify({"error": "message required"}), 400
+    if not session_id:
+        return jsonify({"error": "session_id required"}), 400
+
+    if session_id not in _CHAT_SESSIONS:
+        _CHAT_SESSIONS[session_id] = []
+
+    _CHAT_SESSIONS[session_id].append({"role": "user", "content": message})
+    messages = [{"role": "system", "content": _CHAT_SYSTEM_PROMPT}] + _CHAT_SESSIONS[session_id]
+    model    = OPENROUTER_MODEL if USE_CLOUD else (get_model() or LLM_MODEL)
+
+    def generate():
+        full_response = []
+        try:
+            with _LLM_SEM:
+                token_gen = _stream_openrouter(messages) if USE_CLOUD else _stream_llama_server(messages, model)
+                for token in token_gen:
+                    full_response.append(token)
+                    yield f"data: {json.dumps({'token': token})}\n\n"
+            # Normal completion — save assistant response, then signal done
+            if full_response:
+                _CHAT_SESSIONS[session_id].append(
+                    {"role": "assistant", "content": "".join(full_response)}
+                )
+            else:
+                # LLM yielded zero tokens — remove the orphaned user message
+                msgs = _CHAT_SESSIONS.get(session_id, [])
+                if msgs and msgs[-1]["role"] == "user":
+                    msgs.pop()
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            print(f"[chat/stream] error: {e}")
+            # Remove orphaned user message (no paired assistant response will be saved)
+            msgs = _CHAT_SESSIONS.get(session_id, [])
+            if msgs and msgs[-1]["role"] == "user":
+                msgs.pop()
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            yield "data: [DONE]\n\n"
+
+    return Response(
+        generate(),
+        content_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.route('/api/chat/session', methods=['GET'])
+def get_chat_session():
+    """Return stored messages for a session — used by frontend to restore on page reload."""
+    session_id = request.args.get('session_id', '').strip()
+    messages   = _CHAT_SESSIONS.get(session_id, [])
+    return jsonify({"messages": messages})
+
+
+@app.route('/api/chat/truncate', methods=['POST'])
+def truncate_chat_session():
+    """Keep only the first keep_up_to messages — used by Edit to discard subsequent turns."""
+    data       = request.json or {}
+    session_id = data.get('session_id', '').strip()
+    try:
+        keep_up_to = max(0, int(data.get('keep_up_to', 0)))
+    except (ValueError, TypeError):
+        return jsonify({"error": "keep_up_to must be a non-negative integer"}), 400
+    if session_id in _CHAT_SESSIONS:
+        _CHAT_SESSIONS[session_id] = _CHAT_SESSIONS[session_id][:keep_up_to]
+    return jsonify({"success": True})
+
+
+@app.route('/api/chat/stop', methods=['POST'])
+def stop_chat_stream():
+    """Client-initiated stop: remove orphaned user message if generation was aborted."""
+    data       = request.json or {}
+    session_id = data.get('session_id', '').strip()
+    msgs       = _CHAT_SESSIONS.get(session_id, [])
+    if msgs and msgs[-1]["role"] == "user":
+        msgs.pop()
+    return jsonify({"success": True})
+
+
+@app.route('/api/chat/session', methods=['DELETE'])
+def clear_chat_session():
+    data       = request.json or {}
+    session_id = data.get('session_id', '').strip()
+    if session_id in _CHAT_SESSIONS:
+        del _CHAT_SESSIONS[session_id]
+    return jsonify({"success": True})
+
+
+@app.route('/api/chat/download-docx', methods=['POST'])
+def download_chat_docx():
+    data       = request.json or {}
+    session_id = data.get('session_id', '').strip()
+    messages   = _CHAT_SESSIONS.get(session_id, [])
+
+    if not messages:
+        return jsonify({"error": "No conversation to download"}), 400
+
+    doc = Document()
+    doc.add_heading("Chat Conversation", 0)
+    for msg in messages:
+        p = doc.add_paragraph()
+        p.add_run(f"{msg['role'].capitalize()}: ").bold = True
+        p.add_run(msg['content'])
+        doc.add_paragraph()
+
+    tmp = tempfile.NamedTemporaryFile(suffix='.docx', delete=False, dir=UPLOAD_FOLDER)
+    doc.save(tmp.name)
+    tmp.close()
+    return send_file(
+        tmp.name,
+        as_attachment=True,
+        download_name='chat_conversation.docx',
+        mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    )
 
 
 if __name__ == '__main__':
