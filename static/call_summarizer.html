@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Call Summarizer — Agile Suite</title>
+<link rel="icon" href="/static/agile-logo.svg" type="image/svg+xml">
+<script src="https://unpkg.com/@tailwindcss/browser@4"></script>
+<style type="text/tailwindcss">
+  @theme {
+    --color-brand-red: #dc2626;
+    --color-brand-blue: #1d4ed8;
+    --color-brand-violet: #7c3aed;
+    --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  }
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+  body { font-family: 'Inter', sans-serif; }
+
+  .drop-zone { transition: border-color .2s, background .2s; }
+  .drop-zone.dragging { border-color: #7c3aed; background: #f5f3ff; transform: scale(1.01); }
+
+  .mode-btn { transition: all .15s; }
+  .mode-btn.active { background: #fff; color: #0f172a; box-shadow: 0 1px 4px rgba(0,0,0,.1); }
+
+  @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+  .shimmer {
+    background: linear-gradient(90deg,#7c3aed 25%,#a78bfa 50%,#7c3aed 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+  }
+
+  @keyframes fadeIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none} }
+  .fade-in { animation: fadeIn .3s ease; }
+
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .pulse { animation: pulse 2s infinite; }
+
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+
+  .section-card { transition: box-shadow .2s; }
+  .section-card:hover { box-shadow: 0 4px 20px rgba(0,0,0,.06); }
+</style>
+</head>
+<body class="bg-slate-50 min-h-screen flex flex-col">
+
+<!-- Header -->
+<header class="bg-white border-b border-slate-200 sticky top-0 z-30">
+  <div class="max-w-6xl mx-auto px-6 py-3.5 flex items-center justify-between">
+    <div class="flex items-center gap-4">
+      <a href="/" class="flex items-center gap-1.5 text-xs font-semibold text-slate-400 hover:text-violet-600 transition-colors">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
+        </svg>
+        Home
+      </a>
+      <span class="text-slate-200">|</span>
+      <a href="/"><img src="/static/agile-logo.svg" alt="Agile Suite" class="h-8"></a>
+    </div>
+    <div class="flex items-center gap-2 text-xs font-semibold px-3 py-1.5 bg-slate-100 border border-slate-200 rounded-full text-slate-500">
+      <span id="statusDot" class="w-2 h-2 rounded-full bg-slate-300 inline-block"></span>
+      <span id="statusText">Checking AI…</span>
+    </div>
+  </div>
+</header>
+
+<main class="flex-1 max-w-6xl mx-auto w-full px-6 py-8">
+
+  <!-- Page title -->
+  <div class="flex items-center gap-3 mb-6">
+    <div class="w-10 h-10 rounded-xl bg-violet-50 border border-violet-200 flex items-center justify-center text-xl shrink-0">📞</div>
+    <div>
+      <h1 class="text-2xl font-black text-slate-900 tracking-tight">Call Summarizer</h1>
+      <p class="text-sm text-slate-500">Upload or paste a transcript — get key takeaways, action items, decisions, risks, and next steps.</p>
+    </div>
+  </div>
+
+  <!-- llama-server offline notice -->
+  <div id="ollamaInfo" class="hidden mb-5 flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800">
+    <span class="text-base mt-0.5">⚠️</span>
+    <div>
+      <strong>llama-server not detected.</strong> AI summarization requires llama-server running locally.
+      Start it via <code class="bg-amber-100 px-1.5 py-0.5 rounded font-mono text-xs">./start_mac.sh</code> then refresh.
+    </div>
+  </div>
+
+  <!-- Error banner -->
+  <div id="alertError" class="hidden mb-4 flex items-center gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700">
+    <span class="text-base shrink-0">❌</span>
+    <span id="errorMsg">Something went wrong.</span>
+  </div>
+
+  <div id="mainGrid" class="grid grid-cols-1 md:grid-cols-2 gap-5">
+
+    <!-- ── INPUT CARD ───────────────────────────────────────────────────────── -->
+    <div id="inputCard" class="bg-white border border-slate-200 rounded-2xl p-6 md:col-span-2">
+      <div class="flex items-center gap-2 mb-4">
+        <div class="w-1 h-5 bg-violet-500 rounded-full"></div>
+        <h2 class="text-xs font-bold tracking-widest text-slate-500 uppercase">Transcript Input</h2>
+      </div>
+
+      <!-- Mode toggle -->
+      <div class="flex bg-slate-100 rounded-xl p-1 mb-5 w-fit">
+        <button id="modeFile" class="mode-btn active text-xs font-bold px-4 py-2 rounded-lg text-slate-600" onclick="setMode('file')">
+          📎 File Upload
+        </button>
+        <button id="modePaste" class="mode-btn text-xs font-bold px-4 py-2 rounded-lg text-slate-400" onclick="setMode('paste')">
+          ✏️ Paste Text
+        </button>
+      </div>
+
+      <!-- File upload -->
+      <div id="filePanel">
+        <div id="dropZone" class="drop-zone border-2 border-dashed border-slate-200 rounded-xl p-8 text-center cursor-pointer hover:border-violet-400 hover:bg-violet-50 transition-all mb-4"
+          onclick="document.getElementById('fileInput').click()"
+          ondragover="ev.preventDefault();this.classList.add('dragging')"
+          ondragleave="this.classList.remove('dragging')"
+          ondrop="handleDrop(event)">
+          <div class="text-3xl mb-2">🗂️</div>
+          <p class="text-sm font-semibold text-slate-700 mb-1">Drop transcript here, or <span class="text-violet-600">click to browse</span></p>
+          <p class="text-xs text-slate-400">Accepted: .txt · .docx · .pdf · .md</p>
+          <input id="fileInput" type="file" accept=".txt,.docx,.pdf,.md" class="hidden" onchange="handleFileSelect(this.files[0])">
+        </div>
+        <div id="fileInfo" class="hidden flex items-center gap-3 bg-violet-50 border border-violet-200 rounded-xl px-4 py-3 mb-4">
+          <span class="text-lg shrink-0">📄</span>
+          <div class="flex-1 min-w-0">
+            <div id="fileName" class="text-sm font-semibold text-slate-800 truncate"></div>
+            <div id="fileSize" class="text-xs text-slate-400"></div>
+          </div>
+          <button onclick="clearFile()" class="text-slate-400 hover:text-red-500 transition-colors text-lg leading-none">×</button>
+        </div>
+      </div>
+
+      <!-- Paste panel -->
+      <div id="pastePanel" class="hidden">
+        <textarea id="pasteInput" rows="10"
+          class="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-700 resize-none focus:outline-none focus:ring-2 focus:ring-violet-300 focus:border-violet-400 mb-4"
+          placeholder="Paste your call transcript here…&#10;&#10;Example:&#10;[00:00] John: Let's kick off — today we're reviewing the integration timeline.&#10;[00:15] Sarah: We have a blocker with the API credentials from the vendor…"></textarea>
+      </div>
+
+      <!-- Submit -->
+      <button id="btnSummarize" onclick="runSummarize()"
+        class="w-full bg-violet-600 hover:bg-violet-700 text-white font-bold text-sm py-3.5 rounded-xl transition-colors flex items-center justify-center gap-2">
+        🧠 Summarize Transcript
+      </button>
+
+      <!-- Progress bar -->
+      <div id="progressWrap" class="hidden mt-4">
+        <div class="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+          <div id="progressBar" class="h-full shimmer rounded-full" style="width:0%"></div>
+        </div>
+        <p id="progressLabel" class="text-xs text-slate-400 mt-2 text-center">Analyzing transcript…</p>
+      </div>
+    </div>
+
+    <!-- ── RESULTS CARD ──────────────────────────────────────────────────────── -->
+    <div id="resultsCard" class="hidden md:col-span-2 space-y-4 fade-in">
+
+      <!-- Results header -->
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <div class="w-1 h-5 bg-violet-500 rounded-full"></div>
+          <h2 class="text-xs font-bold tracking-widest text-slate-500 uppercase">Summary</h2>
+          <span id="modelBadge" class="text-xs bg-violet-50 text-violet-700 border border-violet-200 rounded-full px-2 py-0.5 font-bold"></span>
+        </div>
+        <div class="flex gap-2">
+          <button id="btnCopy" onclick="copyResults()" class="text-xs font-bold text-slate-600 bg-slate-100 border border-slate-200 rounded-lg px-3 py-1.5 hover:bg-slate-200 transition-colors flex items-center gap-1">
+            ⎘ Copy All
+          </button>
+          <button id="btnDownload" onclick="downloadResults()" class="text-xs font-bold text-slate-600 bg-slate-100 border border-slate-200 rounded-lg px-3 py-1.5 hover:bg-slate-200 transition-colors flex items-center gap-1">
+            ↓ Download .docx
+          </button>
+        </div>
+      </div>
+
+      <!-- Grid: 2 columns on larger screens -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+        <!-- Key Takeaways (full width) -->
+        <div id="secTakeaways" class="section-card lg:col-span-2 bg-white border border-slate-200 rounded-2xl p-5">
+          <div class="flex items-center gap-2 mb-4">
+            <span class="text-lg">💡</span>
+            <h3 class="font-bold text-slate-800">Key Takeaways</h3>
+            <span id="takeawayCount" class="text-xs bg-violet-100 text-violet-700 font-bold rounded-full px-2 py-0.5"></span>
+          </div>
+          <ol id="takeawayList" class="space-y-2"></ol>
+        </div>
+
+        <!-- Action Items -->
+        <div id="secActions" class="section-card lg:col-span-2 bg-white border border-slate-200 rounded-2xl p-5">
+          <div class="flex items-center gap-2 mb-4">
+            <span class="text-lg">✅</span>
+            <h3 class="font-bold text-slate-800">Action Items</h3>
+            <span id="actionCount" class="text-xs bg-emerald-100 text-emerald-700 font-bold rounded-full px-2 py-0.5"></span>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm border-collapse">
+              <thead>
+                <tr class="bg-slate-50 border-b border-slate-200">
+                  <th class="text-left px-4 py-2.5 text-xs font-bold text-slate-500 uppercase tracking-widest">#</th>
+                  <th class="text-left px-4 py-2.5 text-xs font-bold text-slate-500 uppercase tracking-widest">Task</th>
+                  <th class="text-left px-4 py-2.5 text-xs font-bold text-slate-500 uppercase tracking-widest">Owner</th>
+                  <th class="text-left px-4 py-2.5 text-xs font-bold text-slate-500 uppercase tracking-widest">Deadline</th>
+                </tr>
+              </thead>
+              <tbody id="actionTable" class="divide-y divide-slate-100"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Decisions -->
+        <div id="secDecisions" class="section-card bg-white border border-slate-200 rounded-2xl p-5">
+          <div class="flex items-center gap-2 mb-4">
+            <span class="text-lg">🎯</span>
+            <h3 class="font-bold text-slate-800">Decisions Made</h3>
+          </div>
+          <ul id="decisionList" class="space-y-2"></ul>
+        </div>
+
+        <!-- Risks -->
+        <div id="secRisks" class="section-card bg-white border border-slate-200 rounded-2xl p-5">
+          <div class="flex items-center gap-2 mb-4">
+            <span class="text-lg">⚠️</span>
+            <h3 class="font-bold text-slate-800">Risks &amp; Blockers</h3>
+          </div>
+          <ul id="riskList" class="space-y-2"></ul>
+        </div>
+
+        <!-- Next Steps (full width) -->
+        <div id="secNextSteps" class="section-card lg:col-span-2 bg-white border border-slate-200 rounded-2xl p-5">
+          <div class="flex items-center gap-2 mb-4">
+            <span class="text-lg">➡️</span>
+            <h3 class="font-bold text-slate-800">Next Steps</h3>
+          </div>
+          <ol id="nextStepList" class="space-y-2"></ol>
+        </div>
+
+      </div>
+    </div><!-- /resultsCard -->
+
+  </div><!-- /mainGrid -->
+</main>
+
+<!-- Footer -->
+<footer class="border-t border-slate-200 bg-white mt-8">
+  <div class="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+    <span class="text-xs text-slate-400">All processing is local · llama.cpp · Qwen2.5</span>
+    <div class="flex gap-2">
+      <span class="w-2 h-2 rounded-full bg-violet-500 inline-block"></span>
+      <span class="w-2 h-2 rounded-full bg-brand-blue inline-block"></span>
+      <span class="w-2 h-2 rounded-full bg-slate-300 inline-block"></span>
+    </div>
+  </div>
+</footer>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────────
+let currentFile  = null;
+let currentMode  = 'file';
+let summaryData  = null;
+let transcriptName = '';
+
+// ── AI status ──────────────────────────────────────────────────────────────────
+(async () => {
+  try {
+    const r = await fetch('/api/status');
+    const d = await r.json();
+    const dot = document.getElementById('statusDot');
+    const txt = document.getElementById('statusText');
+    if (d.llama_server && d.llama_server.available) {
+      dot.className = 'w-2 h-2 rounded-full bg-emerald-500 inline-block pulse';
+      txt.textContent = d.active_model || 'AI Ready';
+    } else {
+      dot.className = 'w-2 h-2 rounded-full bg-amber-400 inline-block';
+      txt.textContent = 'llama-server offline';
+      document.getElementById('ollamaInfo').classList.remove('hidden');
+    }
+  } catch(_) {}
+})();
+
+// ── Mode toggle ────────────────────────────────────────────────────────────────
+function setMode(m) {
+  currentMode = m;
+  document.getElementById('filePanel').classList.toggle('hidden', m !== 'file');
+  document.getElementById('pastePanel').classList.toggle('hidden', m !== 'paste');
+  document.getElementById('modeFile').classList.toggle('active', m === 'file');
+  document.getElementById('modePaste').classList.toggle('active', m === 'paste');
+}
+
+// ── File handling ──────────────────────────────────────────────────────────────
+function handleDrop(ev) {
+  ev.preventDefault();
+  document.getElementById('dropZone').classList.remove('dragging');
+  const f = ev.dataTransfer.files[0];
+  if (f) handleFileSelect(f);
+}
+
+function handleFileSelect(f) {
+  if (!f) return;
+  currentFile = f;
+  transcriptName = f.name.replace(/\.[^.]+$/, '');
+  document.getElementById('fileName').textContent = f.name;
+  document.getElementById('fileSize').textContent = formatSize(f.size);
+  document.getElementById('fileInfo').classList.remove('hidden');
+  document.getElementById('dropZone').classList.add('hidden');
+}
+
+function clearFile() {
+  currentFile = null;
+  transcriptName = '';
+  document.getElementById('fileInput').value = '';
+  document.getElementById('fileInfo').classList.add('hidden');
+  document.getElementById('dropZone').classList.remove('hidden');
+}
+
+function formatSize(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1024*1024) return (b/1024).toFixed(1) + ' KB';
+  return (b/1024/1024).toFixed(1) + ' MB';
+}
+
+async function readText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload  = e => resolve(e.target.result);
+    reader.onerror = reject;
+    reader.readAsText(file);
+  });
+}
+
+// ── Error / progress helpers ───────────────────────────────────────────────────
+function showError(msg) {
+  const el = document.getElementById('alertError');
+  document.getElementById('errorMsg').textContent = msg;
+  el.classList.remove('hidden');
+  el.classList.add('flex');
+}
+function hideError() {
+  const el = document.getElementById('alertError');
+  el.classList.add('hidden');
+  el.classList.remove('flex');
+}
+
+function setProgress(pct, label) {
+  document.getElementById('progressWrap').classList.remove('hidden');
+  document.getElementById('progressBar').style.width = pct + '%';
+  document.getElementById('progressLabel').textContent = label;
+}
+function hideProgress() {
+  document.getElementById('progressWrap').classList.add('hidden');
+}
+
+// ── Main: run summarize ────────────────────────────────────────────────────────
+async function runSummarize() {
+  hideError();
+  hideProgress();
+
+  let sourceText = '';
+  if (currentMode === 'file') {
+    if (!currentFile) { showError('Upload a transcript file first.'); return; }
+    try {
+      sourceText = await readText(currentFile);
+    } catch(_) { showError('Could not read file. Try .txt or .md format.'); return; }
+  } else {
+    sourceText = document.getElementById('pasteInput').value.trim();
+    if (!sourceText) { showError('Paste a transcript first.'); return; }
+    transcriptName = 'Call Transcript';
+  }
+
+  const btn = document.getElementById('btnSummarize');
+  btn.disabled = true;
+  btn.innerHTML = '⏳ Analyzing…';
+  setProgress(30, 'Sending transcript to AI…');
+
+  try {
+    setProgress(60, 'AI is reading the transcript…');
+    const resp = await fetch('/api/summarize-call', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ source: sourceText })
+    });
+
+    setProgress(90, 'Building summary…');
+    const json = await resp.json();
+    if (!resp.ok || json.error) { showError(json.error || 'Server error.'); return; }
+
+    summaryData = json.data;
+    renderResults(json.data, json.model);
+    setProgress(100, 'Done!');
+    setTimeout(hideProgress, 600);
+
+    // Collapse input to half width
+    document.getElementById('inputCard').classList.remove('md:col-span-2');
+    document.getElementById('resultsCard').classList.remove('hidden');
+    document.getElementById('resultsCard').classList.add('fade-in');
+
+  } catch(e) {
+    showError('Network error: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '🧠 Summarize Transcript';
+  }
+}
+
+// ── Render results ─────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function renderResults(d, model) {
+  if (model) document.getElementById('modelBadge').textContent = model;
+
+  // Key Takeaways
+  const takeaways = d.key_takeaways || [];
+  document.getElementById('takeawayCount').textContent = takeaways.length;
+  document.getElementById('takeawayList').innerHTML = takeaways.map((t, i) => `
+    <li class="flex items-start gap-3 text-sm text-slate-700 bg-violet-50 border border-violet-100 rounded-xl px-4 py-2.5">
+      <span class="font-black text-violet-400 shrink-0 w-5 text-right">${i+1}</span>
+      <span>${esc(t)}</span>
+    </li>`).join('');
+
+  // Action Items
+  const actions = d.action_items || [];
+  document.getElementById('actionCount').textContent = actions.length + ' item' + (actions.length !== 1 ? 's' : '');
+  document.getElementById('actionTable').innerHTML = actions.map((a, i) => `
+    <tr class="hover:bg-slate-50 transition-colors">
+      <td class="px-4 py-3 text-xs font-bold text-slate-400">${i+1}</td>
+      <td class="px-4 py-3 font-medium text-slate-800">${esc(a.task||a)}</td>
+      <td class="px-4 py-3">
+        <span class="text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200 rounded-full px-2 py-0.5">${esc(a.owner||'TBD')}</span>
+      </td>
+      <td class="px-4 py-3">
+        <span class="text-xs font-bold ${a.deadline && a.deadline!=='TBD' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-slate-100 text-slate-400 border-slate-200'} border rounded-full px-2 py-0.5">${esc(a.deadline||'TBD')}</span>
+      </td>
+    </tr>`).join('');
+
+  // Decisions
+  const decisions = d.decisions || [];
+  document.getElementById('decisionList').innerHTML = decisions.length
+    ? decisions.map(d => `
+        <li class="flex items-start gap-2 text-sm text-slate-700 bg-emerald-50 border border-emerald-100 rounded-xl px-4 py-2.5">
+          <span class="text-emerald-500 shrink-0 mt-0.5">✓</span>
+          <span>${esc(d)}</span>
+        </li>`).join('')
+    : '<li class="text-xs text-slate-400 italic">No decisions recorded.</li>';
+
+  // Risks
+  const risks = d.risks || [];
+  document.getElementById('riskList').innerHTML = risks.length
+    ? risks.map(r => `
+        <li class="flex items-start gap-2 text-sm text-slate-700 bg-red-50 border border-red-100 rounded-xl px-4 py-2.5">
+          <span class="text-red-400 shrink-0 mt-0.5">⚠</span>
+          <span>${esc(r)}</span>
+        </li>`).join('')
+    : '<li class="text-xs text-slate-400 italic">No risks raised.</li>';
+
+  // Next Steps
+  const steps = d.next_steps || [];
+  document.getElementById('nextStepList').innerHTML = steps.map((s, i) => `
+    <li class="flex items-start gap-3 text-sm text-slate-700 bg-blue-50 border border-blue-100 rounded-xl px-4 py-2.5">
+      <span class="font-black text-blue-400 shrink-0 w-5 text-right">${i+1}</span>
+      <span>${esc(s)}</span>
+    </li>`).join('');
+}
+
+// ── Copy All ───────────────────────────────────────────────────────────────────
+function buildPlainText() {
+  if (!summaryData) return '';
+  const d = summaryData;
+  const lines = [];
+  const sep = '═'.repeat(50);
+
+  lines.push(sep, 'CALL SUMMARY' + (transcriptName ? ` — ${transcriptName}` : ''), sep, '');
+
+  lines.push('💡 KEY TAKEAWAYS');
+  (d.key_takeaways||[]).forEach((t,i) => lines.push(`  ${i+1}. ${t}`));
+  lines.push('');
+
+  lines.push('✅ ACTION ITEMS');
+  (d.action_items||[]).forEach((a,i) => {
+    const task = typeof a === 'string' ? a : a.task || '';
+    const owner = typeof a === 'object' ? (a.owner||'TBD') : 'TBD';
+    const dl    = typeof a === 'object' ? (a.deadline||'TBD') : 'TBD';
+    lines.push(`  ${i+1}. ${task}`);
+    lines.push(`     Owner: ${owner}  |  Deadline: ${dl}`);
+  });
+  lines.push('');
+
+  lines.push('🎯 DECISIONS MADE');
+  (d.decisions||[]).forEach(x => lines.push(`  • ${x}`));
+  lines.push('');
+
+  lines.push('⚠️ RISKS & BLOCKERS');
+  (d.risks||[]).forEach(x => lines.push(`  • ${x}`));
+  lines.push('');
+
+  lines.push('➡️ NEXT STEPS');
+  (d.next_steps||[]).forEach((s,i) => lines.push(`  ${i+1}. ${s}`));
+
+  return lines.join('\n');
+}
+
+function copyResults() {
+  const btn = document.getElementById('btnCopy');
+  navigator.clipboard.writeText(buildPlainText()).then(() => {
+    const orig = btn.innerHTML;
+    btn.innerHTML = '✓ Copied!';
+    setTimeout(() => btn.innerHTML = orig, 2000);
+  }).catch(() => {});
+}
+
+// ── Download .docx ─────────────────────────────────────────────────────────────
+async function downloadResults() {
+  if (!summaryData) return;
+  const btn = document.getElementById('btnDownload');
+  btn.innerHTML = '⏳ Generating…';
+  try {
+    const resp = await fetch('/api/download-call-docx', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ data: summaryData, transcript_name: transcriptName })
+    });
+    if (!resp.ok) throw new Error('Server error');
+    const blob = await resp.blob();
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url;
+    a.download = `Call Summary${transcriptName ? ' - ' + transcriptName : ''}.docx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch(e) {
+    showError('Download failed: ' + e.message);
+  } finally {
+    btn.innerHTML = '↓ Download .docx';
+  }
+}
+</script>
+</body>
+</html>

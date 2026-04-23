@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agile Suite — Intelligent Developer Tools</title>
+<link rel="icon" href="/static/agile-logo.svg" type="image/svg+xml">
+<script src="https://unpkg.com/@tailwindcss/browser@4"></script>
+<style type="text/tailwindcss">
+  @theme {
+    --color-brand-red: #dc2626;
+    --color-brand-blue: #1d4ed8;
+    --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  }
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+  body { font-family: 'Inter', sans-serif; }
+  .card-hover { transition: transform 0.2s ease, box-shadow 0.2s ease; }
+  .card-hover:hover { transform: translateY(-4px); box-shadow: 0 20px 48px rgba(0,0,0,0.10); }
+  .tool-card-red:hover  { border-color: #dc2626 !important; }
+  .tool-card-blue:hover { border-color: #1d4ed8 !important; }
+  .pill { display:inline-flex; align-items:center; font-size:11px; font-weight:600; padding:3px 10px; border-radius:999px; }
+</style>
+</head>
+<body class="bg-slate-50 min-h-screen flex flex-col">
+
+<!-- Header -->
+<header class="bg-white border-b border-slate-200 sticky top-0 z-30">
+  <div class="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
+    <img src="/static/agile-logo.svg" alt="Agile Suite" class="h-9">
+    <span class="text-xs font-semibold text-slate-400 bg-slate-100 border border-slate-200 rounded-full px-3 py-1 tracking-wide uppercase">v1.0 · Local AI</span>
+  </div>
+</header>
+
+<!-- Hero -->
+<main class="flex-1">
+  <section class="max-w-5xl mx-auto px-6 pt-16 pb-10 text-center">
+    <span class="inline-block text-xs font-bold tracking-widest text-brand-red uppercase mb-4 bg-red-50 border border-red-100 rounded-full px-4 py-1.5">Powered by local AI · No data leaves your machine</span>
+    <h1 class="text-4xl sm:text-5xl font-black text-slate-900 leading-tight tracking-tight mb-4">
+      Intelligent tools for<br>
+      <span class="text-brand-blue">modern development</span>
+    </h1>
+    <p class="text-slate-500 text-base max-w-md mx-auto leading-relaxed">
+      Choose a tool below. All processing runs locally using llama.cpp — your data stays private.
+    </p>
+  </section>
+
+  <!-- Tool cards -->
+  <section class="max-w-5xl mx-auto px-6 pb-20">
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+
+      <!-- PII Sanitizer -->
+      <a href="/sanitize"
+         class="card-hover tool-card-red bg-white border-2 border-slate-200 rounded-2xl p-8 flex flex-col gap-5 no-underline text-slate-900 group">
+        <div class="flex items-center gap-4">
+          <div class="w-12 h-12 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-2xl shrink-0">🛡️</div>
+          <div>
+            <div class="text-xs font-bold tracking-widest text-emerald-600 uppercase mb-0.5">Data Privacy</div>
+            <h2 class="text-lg font-bold text-slate-900 leading-snug">PII Sanitizer</h2>
+          </div>
+        </div>
+        <p class="text-sm text-slate-500 leading-relaxed flex-1">
+          Detect and mask personally identifiable information in documents, spreadsheets, and plain text using AI + regex patterns.
+        </p>
+        <div class="flex flex-wrap gap-2">
+          <span class="pill bg-emerald-50 border border-emerald-200 text-emerald-700">DOCX</span>
+          <span class="pill bg-emerald-50 border border-emerald-200 text-emerald-700">XLSX</span>
+          <span class="pill bg-emerald-50 border border-emerald-200 text-emerald-700">TXT / CSV</span>
+          <span class="pill bg-emerald-50 border border-emerald-200 text-emerald-700">Paste Text</span>
+        </div>
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-bold tracking-wide text-emerald-600 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-1.5 group-hover:bg-emerald-600 group-hover:text-white transition-colors">
+            Open Tool →
+          </span>
+        </div>
+      </a>
+
+      <!-- Agile Doc Generator -->
+      <a href="/project-docs"
+         class="card-hover tool-card-blue bg-white border-2 border-slate-200 rounded-2xl p-8 flex flex-col gap-5 no-underline text-slate-900 group">
+        <div class="flex items-center gap-4">
+          <div class="w-12 h-12 rounded-xl bg-blue-50 border border-blue-200 flex items-center justify-center text-2xl shrink-0">📋</div>
+          <div>
+            <div class="text-xs font-bold tracking-widest text-brand-blue uppercase mb-0.5">Agile Planning</div>
+            <h2 class="text-lg font-bold text-slate-900 leading-snug">Project Document Generator</h2>
+          </div>
+        </div>
+        <p class="text-sm text-slate-500 leading-relaxed flex-1">
+          Upload SOW, MVP, design or branding documents and generate a complete Agile project artifact suite — backlog, sprints, reviews, retrospectives, and risk register.
+        </p>
+        <div class="flex flex-wrap gap-2">
+          <span class="pill bg-blue-50 border border-blue-200 text-brand-blue">Epics &amp; Stories</span>
+          <span class="pill bg-blue-50 border border-blue-200 text-brand-blue">Sprint Plan</span>
+          <span class="pill bg-blue-50 border border-blue-200 text-brand-blue">Retrospectives</span>
+          <span class="pill bg-blue-50 border border-blue-200 text-brand-blue">Risk Register</span>
+        </div>
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-bold tracking-wide text-brand-blue bg-blue-50 border border-blue-200 rounded-lg px-3 py-1.5 group-hover:bg-brand-blue group-hover:text-white transition-colors">
+            Open Tool →
+          </span>
+        </div>
+      </a>
+
+      <!-- Call Summarizer -->
+      <a href="/call-summarizer"
+         class="card-hover tool-card-red bg-white border-2 border-slate-200 rounded-2xl p-8 flex flex-col gap-5 no-underline text-slate-900 group">
+        <div class="flex items-center gap-4">
+          <div class="w-12 h-12 rounded-xl bg-violet-50 border border-violet-200 flex items-center justify-center text-2xl shrink-0">📞</div>
+          <div>
+            <div class="text-xs font-bold tracking-widest text-violet-600 uppercase mb-0.5">AI Insights</div>
+            <h2 class="text-lg font-bold text-slate-900 leading-snug">Call Summarizer</h2>
+          </div>
+        </div>
+        <p class="text-sm text-slate-500 leading-relaxed flex-1">
+          Upload or paste a call transcript and get AI-generated key takeaways, action items, decisions, risks, and next steps.
+        </p>
+        <div class="flex flex-wrap gap-2">
+          <span class="pill bg-violet-50 border border-violet-200 text-violet-700">Takeaways</span>
+          <span class="pill bg-violet-50 border border-violet-200 text-violet-700">Action Items</span>
+          <span class="pill bg-violet-50 border border-violet-200 text-violet-700">Decisions</span>
+          <span class="pill bg-violet-50 border border-violet-200 text-violet-700">Risks</span>
+        </div>
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-bold tracking-wide text-violet-600 bg-violet-50 border border-violet-200 rounded-lg px-3 py-1.5 group-hover:bg-violet-600 group-hover:text-white transition-colors">
+            Open Tool →
+          </span>
+        </div>
+      </a>
+
+    </div>
+  </section>
+</main>
+
+<!-- Footer -->
+<footer class="border-t border-slate-200 bg-white">
+  <div class="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
+    <span class="text-xs text-slate-400">All processing is local · llama.cpp · Qwen2.5</span>
+    <div class="flex gap-2">
+      <span class="w-2 h-2 rounded-full bg-brand-red inline-block"></span>
+      <span class="w-2 h-2 rounded-full bg-brand-blue inline-block"></span>
+      <span class="w-2 h-2 rounded-full bg-slate-300 inline-block"></span>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

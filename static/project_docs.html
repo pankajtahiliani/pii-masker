@@ -1,0 +1,1719 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agile Document Generator</title>
+<link rel="icon" href="/static/agile-logo.svg" type="image/svg+xml">
+<script src="https://unpkg.com/@tailwindcss/browser@4"></script>
+<style type="text/tailwindcss">
+  @theme {
+    --color-brand-red: #dc2626;
+    --color-brand-blue: #1d4ed8;
+    --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  }
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+  body { font-family:'Inter',sans-serif; }
+
+  /* File drop */
+  .drop-zone { transition: border-color .2s, background .2s; }
+  .drop-zone.drag-over { border-color:#1d4ed8; background:#eff6ff; }
+
+  /* Artifact checkbox */
+  .artifact-item { cursor:pointer; transition: border-color .15s, background .15s; }
+  .artifact-item.checked { border-color:#1d4ed8; background:#eff6ff; }
+  .artifact-item.checked .cb-box { background:#1d4ed8; border-color:#1d4ed8; color:#fff; }
+
+  /* Tab */
+  .art-tab { transition: all .15s; }
+  .art-tab.active { background:#1d4ed8; color:#fff; border-color:#1d4ed8; }
+
+  /* Spinner */
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .spin { animation:spin .7s linear infinite; }
+
+  /* Pulse */
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .pulse { animation:pulse 1.2s infinite; }
+
+  /* Story card edit */
+  [contenteditable]:focus { outline:2px solid #1d4ed8; border-radius:4px; }
+
+  /* Severity badges */
+  .sev-critical { background:#fef2f2; color:#dc2626; border:1px solid #fecaca; }
+  .sev-high     { background:#fff7ed; color:#ea580c; border:1px solid #fed7aa; }
+  .sev-medium   { background:#fefce8; color:#ca8a04; border:1px solid #fef08a; }
+  .sev-low      { background:#f0fdf4; color:#16a34a; border:1px solid #bbf7d0; }
+
+  /* Priority */
+  .pri-must   { background:#fef2f2; color:#dc2626; border:1px solid #fecaca; }
+  .pri-should { background:#fff7ed; color:#ea580c; border:1px solid #fed7aa; }
+  .pri-could  { background:#f0fdf4; color:#16a34a; border:1px solid #bbf7d0; }
+  .pri-wont   { background:#f8fafc; color:#64748b; border:1px solid #e2e8f0; }
+
+  /* Sprint card */
+  .sprint-card { transition: box-shadow .2s; }
+  .sprint-card:hover { box-shadow:0 8px 24px rgba(0,0,0,.08); }
+
+  /* Retro quadrant */
+  .retro-quad { min-height:160px; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width:5px; height:5px; }
+  ::-webkit-scrollbar-thumb { background:#cbd5e1; border-radius:4px; }
+
+  /* Fade-in */
+  @keyframes fadeIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none} }
+  .fade-in { animation:fadeIn .3s ease; }
+
+  /* Progress bar shimmer */
+  @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+  .shimmer {
+    background: linear-gradient(90deg,#1d4ed8 25%,#3b82f6 50%,#1d4ed8 75%);
+    background-size:200% 100%;
+    animation:shimmer 1.5s infinite;
+  }
+</style>
+</head>
+<body class="bg-slate-50 min-h-screen flex flex-col">
+
+<!-- ─── Navigation-away warning modal ───────────────────────────────────────── -->
+<div id="navWarnModal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6 fade-in">
+    <div class="flex items-center gap-3 mb-3">
+      <div class="w-10 h-10 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center text-xl shrink-0">⚠️</div>
+      <div>
+        <h3 class="font-black text-slate-900 text-base">Unsaved Output</h3>
+        <p class="text-xs text-slate-500">Your generated artifacts will be lost if you navigate away.</p>
+      </div>
+    </div>
+    <p class="text-sm text-slate-600 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-4">
+      Please <strong>Download the DOCX</strong> before leaving to save your work.
+    </p>
+    <div class="flex gap-2">
+      <button onclick="triggerDocxThenNav()" class="flex-1 bg-brand-blue text-white text-sm font-bold py-2.5 rounded-xl hover:bg-blue-700 transition-colors">
+        ⬇ Download &amp; Leave
+      </button>
+      <button onclick="confirmNav()" class="flex-1 bg-slate-100 text-slate-700 text-sm font-bold py-2.5 rounded-xl hover:bg-slate-200 transition-colors">
+        Leave Anyway
+      </button>
+      <button onclick="cancelNav()" class="px-4 bg-white border border-slate-200 text-slate-600 text-sm font-bold py-2.5 rounded-xl hover:bg-slate-50 transition-colors">
+        Stay
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Refine with AI modal ─────────────────────────────────────────────────── -->
+<div id="refineModal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-2xl mx-auto flex flex-col max-h-[90vh] fade-in">
+    <!-- Header -->
+    <div class="flex items-center justify-between px-6 pt-6 pb-4 shrink-0">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-violet-50 border border-violet-200 flex items-center justify-center text-xl shrink-0">✨</div>
+        <div>
+          <h3 class="font-black text-slate-900 text-base">Refine with AI</h3>
+          <p class="text-xs text-slate-500" id="refineModalSubtitle">Improve the current output</p>
+        </div>
+      </div>
+      <button onclick="closeRefineModal()" class="text-slate-400 hover:text-slate-600 text-xl font-bold leading-none">✕</button>
+    </div>
+
+    <!-- Scrollable body -->
+    <div class="overflow-y-auto px-6 pb-2 flex-1 space-y-4">
+      <!-- Feedback -->
+      <div>
+        <label class="text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5 block">Optional Feedback</label>
+        <textarea id="refineFeedback" rows="2" placeholder="e.g. Add more technical risks, include data migration details…"
+          class="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-violet-400 resize-none bg-slate-50"></textarea>
+      </div>
+
+      <!-- AI Prompt preview -->
+      <div class="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-xs font-mono text-slate-500 leading-relaxed" id="refinePromptPreview"></div>
+
+      <!-- Current output preview -->
+      <div id="refineCurrentWrap">
+        <div class="flex items-center gap-2 mb-2">
+          <span class="text-xs font-bold text-slate-500 uppercase tracking-wide">Current Output</span>
+          <span class="text-xs text-slate-400">(what will be improved)</span>
+        </div>
+        <div id="refineCurrentPreview"
+          class="border border-slate-200 rounded-xl bg-white text-sm text-slate-700 overflow-y-auto max-h-72 p-4 space-y-3 leading-relaxed">
+          <p class="text-slate-400 italic text-xs">No output yet — generate first, then refine.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer actions -->
+    <div class="px-6 pt-3 pb-5 shrink-0 space-y-2">
+      <div class="flex gap-2">
+        <button onclick="runRefine()" id="refineRunBtn"
+          class="flex-1 bg-violet-600 text-white text-sm font-bold py-2.5 rounded-xl hover:bg-violet-700 transition-colors flex items-center justify-center gap-2">
+          ✨ Refine with Local AI
+        </button>
+        <button onclick="copyRefinePrompt()" class="px-4 bg-slate-100 text-slate-700 text-sm font-bold py-2.5 rounded-xl hover:bg-slate-200 transition-colors" title="Copy prompt for use in Claude/ChatGPT">
+          📋 Copy Prompt
+        </button>
+      </div>
+      <p class="text-xs text-slate-400 text-center">Or copy the prompt above and paste it into Claude.ai / ChatGPT for cloud-quality refinement.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Header ──────────────────────────────────────────────────────────────── -->
+<header class="bg-white border-b border-slate-200 sticky top-0 z-30">
+  <div class="max-w-5xl mx-auto px-6 py-3.5 flex items-center justify-between">
+    <div class="flex items-center gap-4">
+      <a href="/" id="homeLink" onclick="return interceptNav(event, '/')" class="flex items-center gap-1.5 text-xs font-semibold text-slate-400 hover:text-brand-blue transition-colors">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+        Home
+      </a>
+      <span class="text-slate-200">|</span>
+      <a href="/" onclick="return interceptNav(event, '/')"><img src="/static/agile-logo.svg" alt="Agile Suite" class="h-8"></a>
+    </div>
+    <div class="flex items-center gap-2">
+      <select id="modelSelect" title="Select LLM model"
+        class="text-xs font-semibold border border-slate-200 rounded-full px-3 py-1.5 bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-brand-blue max-w-[240px] truncate">
+        <option value="">Loading models…</option>
+      </select>
+      <div class="flex items-center gap-2 text-xs font-semibold px-3 py-1.5 bg-slate-100 border border-slate-200 rounded-full text-slate-500">
+        <span id="aiDot" class="w-2 h-2 rounded-full bg-slate-300 inline-block"></span>
+        <span id="aiStatus">Checking AI…</span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main class="flex-1">
+<!-- ─── Page title ──────────────────────────────────────────────────────────── -->
+<div class="max-w-5xl mx-auto px-6 pt-8 pb-2">
+  <div class="flex items-center gap-3 mb-1">
+    <div class="w-10 h-10 rounded-xl bg-blue-100 border border-blue-200 flex items-center justify-center text-xl shrink-0">📋</div>
+    <h1 class="text-2xl font-black text-slate-900 tracking-tight">Agile Document Generator</h1>
+  </div>
+  <p class="text-sm text-slate-500 ml-13 pl-0.5" style="margin-left:52px">
+    Upload your project documents — SOW, MVP specs, design files, branding guidelines — and generate a full Agile artifact suite using local AI.
+  </p>
+</div>
+
+<!-- ─── Steps indicator ─────────────────────────────────────────────────────── -->
+<div class="max-w-5xl mx-auto px-6 py-6">
+  <div class="flex items-center gap-2">
+    <div class="flex items-center gap-2">
+      <span class="w-6 h-6 rounded-full bg-brand-blue text-white text-xs font-bold flex items-center justify-center shrink-0">1</span>
+      <span class="text-sm font-semibold text-brand-blue">Upload Documents</span>
+    </div>
+    <div class="flex-1 h-px bg-slate-200 mx-2"></div>
+    <div class="flex items-center gap-2">
+      <span class="w-6 h-6 rounded-full bg-slate-200 text-slate-500 text-xs font-bold flex items-center justify-center shrink-0" id="step2num">2</span>
+      <span class="text-sm font-semibold text-slate-400" id="step2lbl">Select Artifacts</span>
+    </div>
+    <div class="flex-1 h-px bg-slate-200 mx-2"></div>
+    <div class="flex items-center gap-2">
+      <span class="w-6 h-6 rounded-full bg-slate-200 text-slate-500 text-xs font-bold flex items-center justify-center shrink-0" id="step3num">3</span>
+      <span class="text-sm font-semibold text-slate-400" id="step3lbl">Review &amp; Export</span>
+    </div>
+  </div>
+</div>
+
+<div class="max-w-5xl mx-auto px-6 pb-10 space-y-5">
+
+  <!-- ─── Step 1: Upload ─────────────────────────────────────────────────────── -->
+  <div class="bg-white border border-slate-200 rounded-2xl p-6">
+    <div class="flex items-center gap-2 mb-4">
+      <div class="w-1 h-5 bg-brand-blue rounded-full"></div>
+      <h2 class="text-xs font-bold tracking-widest text-slate-500 uppercase">Step 1 — Source Documents</h2>
+    </div>
+
+    <!-- Drop zone -->
+    <div id="dropZone"
+         class="drop-zone border-2 border-dashed border-slate-300 rounded-xl p-10 text-center cursor-pointer relative"
+         onclick="document.getElementById('fileInput').click()">
+      <input type="file" id="fileInput" multiple accept=".txt,.docx,.pdf,.csv,.md" class="hidden">
+      <div class="text-4xl mb-3">📂</div>
+      <p class="text-sm font-semibold text-slate-700 mb-1">Drop files here, or <span class="text-brand-blue">click to browse</span></p>
+      <p class="text-xs text-slate-400">SOW · MVP Docs · Design Specs · Branding Guidelines · Any project asset</p>
+      <p class="text-xs text-slate-400 mt-1">Accepted: <span class="font-mono">.txt · .docx · .pdf · .csv · .md</span></p>
+    </div>
+
+    <!-- File list -->
+    <div id="fileList" class="mt-4 space-y-2 hidden"></div>
+
+    <!-- OR divider -->
+    <div class="flex items-center gap-3 my-4">
+      <div class="flex-1 h-px bg-slate-200"></div>
+      <span class="text-xs font-bold text-slate-400 tracking-widest uppercase">or paste text</span>
+      <div class="flex-1 h-px bg-slate-200"></div>
+    </div>
+
+    <textarea id="pasteInput"
+      class="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-700 font-mono leading-relaxed focus:outline-none focus:ring-2 focus:ring-brand-blue focus:border-transparent resize-y min-h-[120px] bg-slate-50 placeholder-slate-400"
+      placeholder="Paste your estimation details, SOW content, or project description here…
+
+Example:
+Project: E-commerce platform rebuild
+Duration: 6 months
+Team: 3 developers, 1 QA, 1 designer
+Key features: User auth, product catalog, cart, checkout, admin panel"></textarea>
+  </div>
+
+  <!-- ─── Step 2: Artifacts ──────────────────────────────────────────────────── -->
+  <div class="bg-white border border-slate-200 rounded-2xl p-6">
+    <div class="flex items-center justify-between mb-4">
+      <div class="flex items-center gap-2">
+        <div class="w-1 h-5 bg-brand-blue rounded-full"></div>
+        <h2 class="text-xs font-bold tracking-widest text-slate-500 uppercase">Step 2 — Artifacts to Generate</h2>
+      </div>
+      <button onclick="toggleSelectAll()" id="selAllBtn"
+        class="text-xs font-bold text-brand-blue hover:text-blue-800 transition-colors">Select All</button>
+    </div>
+
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3" id="artifactsGrid">
+
+      <label class="artifact-item checked border-2 border-slate-200 bg-white rounded-xl p-4 flex gap-3" data-key="backlog">
+        <input type="checkbox" checked class="hidden">
+        <div class="cb-box w-5 h-5 rounded-md border-2 border-slate-300 flex items-center justify-center shrink-0 text-xs mt-0.5">✓</div>
+        <div>
+          <div class="text-sm font-bold text-slate-800">Product Backlog</div>
+          <div class="text-xs text-slate-500 mt-0.5">Epics &amp; user stories with story points and acceptance criteria</div>
+        </div>
+      </label>
+
+      <label class="artifact-item checked border-2 border-slate-200 bg-white rounded-xl p-4 flex gap-3" data-key="sprint_plan">
+        <input type="checkbox" checked class="hidden">
+        <div class="cb-box w-5 h-5 rounded-md border-2 border-slate-300 flex items-center justify-center shrink-0 text-xs mt-0.5">✓</div>
+        <div>
+          <div class="text-sm font-bold text-slate-800">Sprint Planning</div>
+          <div class="text-xs text-slate-500 mt-0.5">Auto-created sprints with tasks and estimations</div>
+        </div>
+      </label>
+
+      <label class="artifact-item checked border-2 border-slate-200 bg-white rounded-xl p-4 flex gap-3" data-key="sprint_review">
+        <input type="checkbox" checked class="hidden">
+        <div class="cb-box w-5 h-5 rounded-md border-2 border-slate-300 flex items-center justify-center shrink-0 text-xs mt-0.5">✓</div>
+        <div>
+          <div class="text-sm font-bold text-slate-800">Sprint Reviews</div>
+          <div class="text-xs text-slate-500 mt-0.5">Per-sprint review templates with demo checklists</div>
+        </div>
+      </label>
+
+      <label class="artifact-item checked border-2 border-slate-200 bg-white rounded-xl p-4 flex gap-3" data-key="retrospective">
+        <input type="checkbox" checked class="hidden">
+        <div class="cb-box w-5 h-5 rounded-md border-2 border-slate-300 flex items-center justify-center shrink-0 text-xs mt-0.5">✓</div>
+        <div>
+          <div class="text-sm font-bold text-slate-800">Sprint Retrospective</div>
+          <div class="text-xs text-slate-500 mt-0.5">4-quadrant retro board tailored to the project</div>
+        </div>
+      </label>
+
+      <label class="artifact-item checked border-2 border-slate-200 bg-white rounded-xl p-4 flex gap-3" data-key="risk_register">
+        <input type="checkbox" checked class="hidden">
+        <div class="cb-box w-5 h-5 rounded-md border-2 border-slate-300 flex items-center justify-center shrink-0 text-xs mt-0.5">✓</div>
+        <div>
+          <div class="text-sm font-bold text-slate-800">Risk Register</div>
+          <div class="text-xs text-slate-500 mt-0.5">Identified risks with severity and mitigation plans</div>
+        </div>
+      </label>
+
+      <label class="artifact-item checked border-2 border-slate-200 bg-white rounded-xl p-4 flex gap-3" data-key="test_cases">
+        <input type="checkbox" checked class="hidden">
+        <div class="cb-box w-5 h-5 rounded-md border-2 border-slate-300 flex items-center justify-center shrink-0 text-xs mt-0.5">✓</div>
+        <div>
+          <div class="text-sm font-bold text-slate-800">Test Cases</div>
+          <div class="text-xs text-slate-500 mt-0.5">Unit, Integration &amp; UAT test cases with steps and expected results</div>
+        </div>
+      </label>
+
+    </div>
+
+    <!-- Multi-select warning — shown dynamically -->
+    <div id="multiWarn" class="hidden mt-4 flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800">
+      <span class="text-lg shrink-0">⏱️</span>
+      <div>
+        <strong id="multiWarnTitle">Processing time notice</strong>
+        <p id="multiWarnBody" class="text-xs mt-0.5 text-amber-700"></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── Generate button ────────────────────────────────────────────────────── -->
+  <button id="generateBtn" onclick="generateDocs()"
+    class="w-full py-4 bg-brand-blue hover:bg-blue-800 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-base rounded-2xl flex items-center justify-center gap-3 transition-colors shadow-sm shadow-blue-200">
+    <svg id="btnSpinner" class="spin w-5 h-5 hidden" fill="none" viewBox="0 0 24 24">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"></path>
+    </svg>
+    <span id="btnLabel">Generate Project Documents</span>
+  </button>
+
+  <!-- Progress bar -->
+  <div id="progressWrap" class="hidden">
+    <div class="flex justify-between items-center text-xs font-semibold text-slate-500 mb-1.5">
+      <span id="progressLabel">Generating…</span>
+      <div class="flex items-center gap-3">
+        <span id="progressElapsed" class="text-slate-400 font-mono">⏱ 00:00</span>
+        <span id="progressPct" class="text-brand-blue">0%</span>
+      </div>
+    </div>
+    <div class="h-2 bg-slate-200 rounded-full overflow-hidden">
+      <div id="progressBar" class="shimmer h-full rounded-full transition-all duration-500" style="width:5%"></div>
+    </div>
+    <!-- Per-artifact status row -->
+    <div id="artifactStatusRow" class="flex flex-wrap gap-2 mt-2"></div>
+  </div>
+
+  <!-- Error -->
+  <div id="errorBox" class="hidden bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700 flex items-start gap-2">
+    <span class="shrink-0">⚠️</span>
+    <span id="errorMsg"></span>
+  </div>
+
+  <!-- ─── Step 3: Output ─────────────────────────────────────────────────────── -->
+  <div id="outputSection" class="hidden fade-in">
+
+    <!-- Unsaved data warning banner -->
+    <div id="unsavedBanner" class="hidden flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 text-xs text-amber-800 font-semibold">
+      <span>⚠️</span>
+      <span>Unsaved output — download before leaving this page.</span>
+      <button onclick="downloadAll()" class="ml-auto text-xs font-bold text-amber-800 underline hover:no-underline">↓ .docx</button>
+      <button onclick="downloadJSON()" class="text-xs font-bold text-amber-800 underline hover:no-underline">↓ .json</button>
+    </div>
+
+    <!-- Toolbar -->
+    <div class="bg-white border border-slate-200 rounded-2xl p-4 flex items-center justify-between flex-wrap gap-3">
+      <div class="flex items-center gap-2">
+        <div class="w-1 h-5 bg-emerald-500 rounded-full"></div>
+        <h2 class="text-xs font-bold tracking-widest text-slate-500 uppercase">Step 3 — Generated Artifacts</h2>
+        <span id="genCount" class="text-xs bg-emerald-100 text-emerald-700 font-bold rounded-full px-2 py-0.5 border border-emerald-200"></span>
+      </div>
+      <div class="flex gap-2 flex-wrap">
+        <button id="btnDownload" onclick="downloadAll()" class="text-xs font-bold text-slate-600 bg-slate-100 border border-slate-200 rounded-lg px-3 py-1.5 hover:bg-slate-200 transition-colors flex items-center gap-1">
+          ↓ Download .docx
+        </button>
+        <button id="btnDownloadJSON" onclick="downloadJSON()" class="text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-1.5 hover:bg-emerald-100 transition-colors flex items-center gap-1">
+          {} Download JSON
+        </button>
+        <button id="btnCopy" onclick="copyAll()" class="text-xs font-bold text-slate-600 bg-slate-100 border border-slate-200 rounded-lg px-3 py-1.5 hover:bg-slate-200 transition-colors flex items-center gap-1">
+          ⎘ Copy All
+        </button>
+      </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="flex gap-2 flex-wrap pt-1" id="artifactTabs"></div>
+
+    <!-- ── Backlog panel ─────────────────────────────────────────── -->
+    <div id="panel-backlog" class="artifact-panel hidden bg-white border border-slate-200 rounded-2xl p-6 fade-in">
+      <div class="flex items-center justify-between mb-5">
+        <h3 class="font-black text-slate-900 text-lg">Product Backlog</h3>
+        <div class="flex gap-2">
+          <button onclick="openRefineModal('backlog')" class="text-xs font-bold text-violet-600 bg-violet-50 border border-violet-200 rounded-lg px-3 py-1.5 hover:bg-violet-100 transition-colors">✨ Refine</button>
+          <button onclick="toggleEdit('backlog')" id="edit-backlog-btn" class="text-xs font-bold text-brand-blue bg-blue-50 border border-blue-200 rounded-lg px-3 py-1.5 hover:bg-blue-100 transition-colors">✏️ Edit</button>
+          <button onclick="addEpic()" class="text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-1.5 hover:bg-emerald-100 transition-colors">+ Epic</button>
+        </div>
+      </div>
+      <div id="backlog-content" class="space-y-4"></div>
+    </div>
+
+    <!-- ── Sprint Plan panel ────────────────────────────────────── -->
+    <div id="panel-sprint_plan" class="artifact-panel hidden bg-white border border-slate-200 rounded-2xl p-6 fade-in">
+      <div class="flex items-center justify-between mb-5">
+        <h3 class="font-black text-slate-900 text-lg">Sprint Planning</h3>
+        <button onclick="openRefineModal('sprint_plan')" class="text-xs font-bold text-violet-600 bg-violet-50 border border-violet-200 rounded-lg px-3 py-1.5 hover:bg-violet-100 transition-colors">✨ Refine</button>
+        <button onclick="toggleEdit('sprint_plan')" id="edit-sprint_plan-btn" class="text-xs font-bold text-brand-blue bg-blue-50 border border-blue-200 rounded-lg px-3 py-1.5 hover:bg-blue-100 transition-colors">✏️ Edit</button>
+      </div>
+      <div id="sprint_plan-content" class="space-y-4"></div>
+    </div>
+
+    <!-- ── Sprint Review panel ──────────────────────────────────── -->
+    <div id="panel-sprint_review" class="artifact-panel hidden bg-white border border-slate-200 rounded-2xl p-6 fade-in">
+      <div class="flex items-center justify-between mb-5">
+        <h3 class="font-black text-slate-900 text-lg">Sprint Reviews</h3>
+        <button onclick="openRefineModal('sprint_review')" class="text-xs font-bold text-violet-600 bg-violet-50 border border-violet-200 rounded-lg px-3 py-1.5 hover:bg-violet-100 transition-colors">✨ Refine</button>
+        <button onclick="toggleEdit('sprint_review')" id="edit-sprint_review-btn" class="text-xs font-bold text-brand-blue bg-blue-50 border border-blue-200 rounded-lg px-3 py-1.5 hover:bg-blue-100 transition-colors">✏️ Edit</button>
+      </div>
+      <div id="sprint_review-content" class="space-y-4"></div>
+    </div>
+
+    <!-- ── Retrospective panel ──────────────────────────────────── -->
+    <div id="panel-retrospective" class="artifact-panel hidden bg-white border border-slate-200 rounded-2xl p-6 fade-in">
+      <div class="flex items-center justify-between mb-5">
+        <h3 class="font-black text-slate-900 text-lg">Sprint Retrospective</h3>
+        <button onclick="openRefineModal('retrospective')" class="text-xs font-bold text-violet-600 bg-violet-50 border border-violet-200 rounded-lg px-3 py-1.5 hover:bg-violet-100 transition-colors">✨ Refine</button>
+        <button onclick="toggleEdit('retrospective')" id="edit-retrospective-btn" class="text-xs font-bold text-brand-blue bg-blue-50 border border-blue-200 rounded-lg px-3 py-1.5 hover:bg-blue-100 transition-colors">✏️ Edit</button>
+      </div>
+      <div id="retrospective-content"></div>
+    </div>
+
+    <!-- ── Risk Register panel ──────────────────────────────────── -->
+    <div id="panel-risk_register" class="artifact-panel hidden bg-white border border-slate-200 rounded-2xl p-6 fade-in">
+      <div class="flex items-center justify-between mb-5">
+        <h3 class="font-black text-slate-900 text-lg">Risk Register</h3>
+        <button onclick="openRefineModal('risk_register')" class="text-xs font-bold text-violet-600 bg-violet-50 border border-violet-200 rounded-lg px-3 py-1.5 hover:bg-violet-100 transition-colors">✨ Refine</button>
+        <button onclick="toggleEdit('risk_register')" id="edit-risk_register-btn" class="text-xs font-bold text-brand-blue bg-blue-50 border border-blue-200 rounded-lg px-3 py-1.5 hover:bg-blue-100 transition-colors">✏️ Edit</button>
+      </div>
+      <div id="risk_register-content" class="overflow-x-auto"></div>
+    </div>
+
+    <!-- ── Test Cases panel ──────────────────────────────────────── -->
+    <div id="panel-test_cases" class="artifact-panel hidden bg-white border border-slate-200 rounded-2xl p-6 fade-in">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="font-black text-slate-900 text-lg">🧪 Test Cases</h3>
+        <div class="flex items-center gap-2">
+          <span id="tc-summary" class="text-xs font-semibold text-slate-500 bg-slate-100 border border-slate-200 rounded-lg px-3 py-1.5"></span>
+          <button onclick="openRefineModal('test_cases')" class="text-xs font-bold text-violet-600 bg-violet-50 border border-violet-200 rounded-lg px-3 py-1.5 hover:bg-violet-100 transition-colors">✨ Refine</button>
+          <button onclick="toggleEdit('test_cases')" id="edit-test_cases-btn" class="text-xs font-bold text-brand-blue bg-blue-50 border border-blue-200 rounded-lg px-3 py-1.5 hover:bg-blue-100 transition-colors">✏️ Edit</button>
+        </div>
+      </div>
+      <!-- Type filter pills -->
+      <div class="flex flex-wrap gap-2 mb-5" id="tc-filters">
+        <button onclick="filterTC('all')"         class="tc-filter active text-xs font-bold px-3 py-1.5 rounded-full border border-brand-blue bg-brand-blue text-white" data-type="all">All</button>
+        <button onclick="filterTC('Unit')"        class="tc-filter text-xs font-bold px-3 py-1.5 rounded-full border border-slate-200 bg-white text-slate-600 hover:border-blue-300" data-type="Unit">🔬 Unit</button>
+        <button onclick="filterTC('Integration')" class="tc-filter text-xs font-bold px-3 py-1.5 rounded-full border border-slate-200 bg-white text-slate-600 hover:border-blue-300" data-type="Integration">🔗 Integration</button>
+        <button onclick="filterTC('UAT')"         class="tc-filter text-xs font-bold px-3 py-1.5 rounded-full border border-slate-200 bg-white text-slate-600 hover:border-blue-300" data-type="UAT">👤 UAT</button>
+      </div>
+      <div id="test_cases-content"></div>
+    </div>
+
+  </div><!-- /outputSection -->
+</div><!-- /container -->
+</main>
+
+<!-- ─── Footer ──────────────────────────────────────────────────────────────── -->
+<footer class="border-t border-slate-200 bg-white">
+  <div class="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
+    <span class="text-xs text-slate-400">All processing is local · llama.cpp · Qwen2.5</span>
+    <div class="flex gap-2">
+      <span class="w-2 h-2 rounded-full bg-brand-blue inline-block"></span>
+      <span class="w-2 h-2 rounded-full bg-slate-300 inline-block"></span>
+      <span class="w-2 h-2 rounded-full bg-slate-200 inline-block"></span>
+    </div>
+  </div>
+</footer>
+
+<!-- ─── JavaScript ──────────────────────────────────────────────────────────── -->
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+let uploadedFiles = [];
+let generatedData = {};
+let activePanel   = null;
+let editModes     = {};
+let projectName   = '';
+
+const ARTIFACT_META = {
+  backlog:      { label:'Product Backlog',   icon:'📦' },
+  sprint_plan:  { label:'Sprint Planning',   icon:'🗓️' },
+  sprint_review:{ label:'Sprint Reviews',    icon:'✅' },
+  retrospective:{ label:'Retrospective',     icon:'🔄' },
+  risk_register:{ label:'Risk Register',     icon:'⚠️' },
+  test_cases:   { label:'Test Cases',        icon:'🧪' },
+};
+
+// ── AI status + model picker ───────────────────────────────────────────────────
+let selectedModel = localStorage.getItem('pd_selected_model') || '';
+
+(async () => {
+  const dot = document.getElementById('aiDot');
+  const lbl = document.getElementById('aiStatus');
+  const sel = document.getElementById('modelSelect');
+
+  try {
+    const r = await fetch('/api/status');
+    const d = await r.json();
+    if (d.llama_server && d.llama_server.available) {
+      dot.className = 'w-2 h-2 rounded-full bg-emerald-500 inline-block pulse';
+      lbl.textContent = d.active_model || 'AI Ready';
+    } else {
+      dot.className = 'w-2 h-2 rounded-full bg-red-400 inline-block';
+      lbl.textContent = 'llama-server offline';
+    }
+  } catch(_) {
+    dot.className = 'w-2 h-2 rounded-full bg-red-400 inline-block';
+    lbl.textContent = 'Status error';
+  }
+
+  // Populate model dropdown
+  try {
+    const mr = await fetch('/api/models');
+    const md = await mr.json();
+    const models = md.models || [];
+    if (!models.length) {
+      sel.innerHTML = '<option value="">No local models</option>';
+      sel.disabled = true;
+      return;
+    }
+    // Prefer saved selection if still available; else server default
+    const avail = new Set(models.map(m => m.name));
+    if (!avail.has(selectedModel)) selectedModel = md.default || models[0].name;
+    sel.innerHTML = models.map(m => {
+      const mins = Math.round(m.timeout / 60);
+      const lab  = `${m.name}  (≤${mins}m/artifact)`;
+      return `<option value="${esc(m.name)}" ${m.name===selectedModel?'selected':''}>${esc(lab)}</option>`;
+    }).join('');
+    sel.addEventListener('change', e => {
+      selectedModel = e.target.value;
+      localStorage.setItem('pd_selected_model', selectedModel);
+      lbl.textContent = selectedModel;
+    });
+    lbl.textContent = selectedModel;
+  } catch(e) {
+    sel.innerHTML = '<option value="">Model list error</option>';
+    sel.disabled = true;
+  }
+})();
+
+// ── File drop ──────────────────────────────────────────────────────────────────
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  [...e.dataTransfer.files].forEach(addFile);
+});
+fileInput.addEventListener('change', () => {
+  [...fileInput.files].forEach(addFile);
+  fileInput.value = '';
+});
+
+const FILE_TYPES = ['SOW','MVP Doc','Design Spec','Branding','Estimation','Other'];
+
+function addFile(f) {
+  if (uploadedFiles.find(u => u.file.name === f.name)) return;
+  uploadedFiles.push({ file: f, type: 'Other', text: '' });
+  renderFileList();
+}
+
+function removeFile(idx) {
+  uploadedFiles.splice(idx, 1);
+  renderFileList();
+}
+
+function renderFileList() {
+  const list = document.getElementById('fileList');
+  if (!uploadedFiles.length) { list.classList.add('hidden'); return; }
+  list.classList.remove('hidden');
+  list.innerHTML = uploadedFiles.map((u, i) => `
+    <div class="flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3">
+      <span class="text-lg shrink-0">${fileIcon(u.file.name)}</span>
+      <div class="flex-1 min-w-0">
+        <div class="text-sm font-semibold text-slate-800 truncate">${esc(u.file.name)}</div>
+        <div class="text-xs text-slate-400">${formatSize(u.file.size)}</div>
+      </div>
+      <select onchange="uploadedFiles[${i}].type=this.value"
+        class="text-xs font-bold border border-blue-200 rounded-lg px-2 py-1 bg-white text-brand-blue focus:outline-none focus:ring-1 focus:ring-brand-blue">
+        ${FILE_TYPES.map(t => `<option value="${t}" ${t===u.type?'selected':''}>${t}</option>`).join('')}
+      </select>
+      <button onclick="removeFile(${i})" class="text-slate-400 hover:text-red-500 text-lg leading-none ml-1">✕</button>
+    </div>`).join('');
+}
+
+function fileIcon(name) {
+  const ext = name.split('.').pop().toLowerCase();
+  return { pdf:'📄', docx:'📝', doc:'📝', xlsx:'📊', xls:'📊', csv:'📊', md:'📋' }[ext] || '📃';
+}
+function formatSize(b) {
+  return b > 1048576 ? (b/1048576).toFixed(1)+' MB' : (b/1024).toFixed(0)+' KB';
+}
+function esc(s) { const t = (s == null) ? '' : (typeof s === 'object' ? JSON.stringify(s) : String(s)); return t.replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+
+// ── Artifact checkboxes ────────────────────────────────────────────────────────
+document.querySelectorAll('.artifact-item').forEach(item => {
+  item.addEventListener('click', () => {
+    const cb = item.querySelector('input');
+    cb.checked = !cb.checked;
+    const box = item.querySelector('.cb-box');
+    item.classList.toggle('checked', cb.checked);
+    box.textContent = cb.checked ? '✓' : '';
+    updateSelAll();
+  });
+});
+
+// Estimated minutes per artifact on gemma3:4b-it-q4_K_M (local AI, sequential)
+const ARTIFACT_EST = {
+  backlog: 2, sprint_plan: 1, sprint_review: 1,
+  retrospective: 1, risk_register: 2, test_cases: 2
+};
+
+function updateSelAll() {
+  const total   = document.querySelectorAll('.artifact-item').length;
+  const checked = [...document.querySelectorAll('.artifact-item.checked')];
+  const count   = checked.length;
+  document.getElementById('selAllBtn').textContent = count === total ? 'Deselect All' : 'Select All';
+
+  const warn = document.getElementById('multiWarn');
+  if (count >= 2) {
+    const estMins = checked.reduce((s, el) => s + (ARTIFACT_EST[el.dataset.key] || 3), 0);
+    const names   = checked.map(el => el.querySelector('.text-sm.font-bold')?.textContent || el.dataset.key).join(', ');
+    warn.classList.remove('hidden');
+    warn.classList.add('flex');
+    document.getElementById('multiWarnTitle').textContent =
+      `⏱ ${count} artifact${count > 1 ? 's' : ''} selected — estimated ~${estMins} min total`;
+    document.getElementById('multiWarnBody').textContent =
+      `Artifacts generate one at a time on your local AI. Each appears as it completes. Heavy artifacts (Product Backlog, Risk Register, Test Cases) each take ~2 min — select only what you need now for fastest results. Selected: ${names}.`;
+  } else {
+    warn.classList.add('hidden');
+    warn.classList.remove('flex');
+  }
+}
+
+function toggleSelectAll() {
+  const items = document.querySelectorAll('.artifact-item');
+  const all   = [...items].every(i => i.classList.contains('checked'));
+  items.forEach(item => {
+    const cb = item.querySelector('input');
+    cb.checked = !all;
+    item.classList.toggle('checked', !all);
+    item.querySelector('.cb-box').textContent = !all ? '✓' : '';
+  });
+  updateSelAll();
+}
+
+// ── Elapsed timer ──────────────────────────────────────────────────────────────
+let _elapsedTimer  = null;
+let _elapsedStart  = 0;
+
+function startElapsed() {
+  _elapsedStart = Date.now();
+  _elapsedTimer = setInterval(() => {
+    const s   = Math.floor((Date.now() - _elapsedStart) / 1000);
+    const mm  = String(Math.floor(s / 60)).padStart(2, '0');
+    const ss  = String(s % 60).padStart(2, '0');
+    document.getElementById('progressElapsed').textContent = `⏱ ${mm}:${ss}`;
+  }, 1000);
+}
+
+function stopElapsed() {
+  if (_elapsedTimer) { clearInterval(_elapsedTimer); _elapsedTimer = null; }
+}
+
+// ── Animated progress bar ──────────────────────────────────────────────────────
+let _progressTimer = null;
+
+function setProgressBar(pct, label) {
+  document.getElementById('progressBar').style.width = pct + '%';
+  document.getElementById('progressPct').textContent = Math.round(pct) + '%';
+  if (label) document.getElementById('progressLabel').textContent = label;
+}
+
+function stopProgressTick() {
+  if (_progressTimer) { clearInterval(_progressTimer); _progressTimer = null; }
+}
+
+// ── Per-artifact status badges ─────────────────────────────────────────────────
+function initStatusBadges(keys) {
+  const row = document.getElementById('artifactStatusRow');
+  row.innerHTML = keys.map(k => {
+    const m = ARTIFACT_META[k] || { icon: '📄', label: k };
+    return `<span id="badge-${k}" class="text-xs font-bold px-2.5 py-1 rounded-full border border-slate-200 bg-slate-100 text-slate-400">
+      ${m.icon} ${m.label} <span class="badge-state">⏳</span>
+    </span>`;
+  }).join('');
+}
+
+function setBadge(key, state) {
+  const el = document.getElementById(`badge-${key}`);
+  if (!el) return;
+  const stateEl = el.querySelector('.badge-state');
+  const colors = {
+    pending:  'border-slate-200 bg-slate-100 text-slate-400',
+    running:  'border-blue-200 bg-blue-50 text-blue-700',
+    done:     'border-emerald-200 bg-emerald-50 text-emerald-700',
+    error:    'border-red-200 bg-red-50 text-red-600',
+  };
+  const icons = { pending:'⏳', running:'⚙️', done:'✓', error:'✗' };
+  el.className = `text-xs font-bold px-2.5 py-1 rounded-full border ${colors[state] || colors.pending}`;
+  if (stateEl) stateEl.textContent = icons[state] || '⏳';
+}
+
+// ── Generate — parallel submission, render as each completes ──────────────────
+async function generateDocs() {
+  hideError();
+
+  const selected = [...document.querySelectorAll('.artifact-item.checked')].map(i => i.dataset.key);
+  if (!selected.length) { showError('Select at least one artifact to generate.'); return; }
+
+  // Collect source (also saved to module-level sourceText for Refine feature)
+  sourceText = document.getElementById('pasteInput').value.trim();
+  if (uploadedFiles.length) {
+    const parts = await Promise.all(uploadedFiles.map(async u => {
+      try { return `[${u.type}: ${u.file.name}]\n` + await readText(u.file); }
+      catch(_) { return `[${u.type}: ${u.file.name}] (Could not read)`; }
+    }));
+    sourceText = parts.join('\n\n---\n\n') + (sourceText ? '\n\n---\n\n' + sourceText : '');
+  }
+  if (!sourceText.trim()) { showError('Upload a document or paste some text first.'); return; }
+
+  // Extract project name
+  if (uploadedFiles.length) {
+    projectName = uploadedFiles[0].file.name.replace(/\.[^.]+$/, '').replace(/[_-]/g, ' ').trim();
+  } else {
+    const firstLine = sourceText.split('\n').map(l => l.trim()).find(l => l.length > 3 && l.length < 80) || '';
+    const match = firstLine.match(/project[:\s]+(.+)/i) || firstLine.match(/^(.{5,60})/);
+    projectName = match ? match[1].trim() : '';
+  }
+
+  // Reset
+  generatedData = {};
+  document.getElementById('artifactTabs').innerHTML = '';
+  document.querySelectorAll('.artifact-panel').forEach(p => p.classList.add('hidden'));
+  document.getElementById('outputSection').classList.add('hidden');
+  document.getElementById('genCount').textContent = '';
+  document.getElementById('progressElapsed').textContent = '⏱ 00:00';
+  document.getElementById('progressWrap').classList.add('hidden');   // hide then show cleanly
+  stopElapsed();
+
+  setLoading(true);
+  initStatusBadges(selected);
+  startElapsed();
+
+  const total = selected.length;
+  let completed = 0;
+  let firstDone = false;
+
+  // ── Parallel: fire all artifact requests concurrently ───────────────────
+  // llama-server with --parallel N processes up to N simultaneously.
+  // Ctx-size divides per slot: n_ctx_slot = ctx_size / parallel.
+  // Set via: llama-server --parallel 8 --ctx-size 16384 (2048 tok/slot)
+  selected.forEach(k => setBadge(k, 'running'));
+  setProgressBar(5, `Generating ${total} artifacts in parallel…`);
+
+  const tasks = selected.map(async (key) => {
+    const meta = ARTIFACT_META[key] || { label: key, icon: '📄' };
+    let _artifactData = null;
+    let _artifactError = false;
+    try {
+      const res = await fetch('/api/generate-artifact', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ source: sourceText, artifact: key, model: selectedModel || undefined })
+      });
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}));
+        console.warn(`[${key}] server error:`, e.error);
+        _artifactData  = { _raw: e.error || `Server error ${res.status}` };
+        _artifactError = true;
+      } else {
+        const d = await res.json();
+        _artifactData = d.data ?? { _raw: 'No data returned' };
+      }
+    } catch(e) {
+      console.warn(`[${key}] network error:`, e);
+      _artifactData  = { _raw: e.message || 'Network error' };
+      _artifactError = true;
+    }
+
+    // Update state + UI as each artifact completes
+    setBadge(key, _artifactError ? 'error' : 'done');
+    generatedData[key] = _artifactData;
+    completed++;
+    const pct = Math.round((completed / total) * 100);
+    setProgressBar(pct, `${_artifactError ? '⚠' : '✓'} ${meta.label} ${_artifactError ? 'failed' : 'complete'} (${completed}/${total})`);
+
+    try {
+      addArtifactTab(key, !firstDone);
+      renderArtifact(key, _artifactData);
+    } catch(renderErr) {
+      console.error(`[${key}] render error:`, renderErr);
+      const el = document.getElementById(`${key}-content`);
+      if (el) el.innerHTML = `<p class="text-red-600 text-sm p-4">⚠ Render error: ${renderErr.message}</p>`;
+    }
+    updateGenCount(completed);
+
+    if (!firstDone) {
+      firstDone = true;
+      document.getElementById('outputSection').classList.remove('hidden');
+      document.getElementById('outputSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      activateStep(3);
+    }
+  });
+
+  await Promise.allSettled(tasks);
+
+  stopElapsed();
+  const totalSec = Math.floor((Date.now() - _elapsedStart) / 1000);
+  const mm = String(Math.floor(totalSec / 60)).padStart(2, '0');
+  const ss = String(totalSec % 60).padStart(2, '0');
+  setProgressBar(100, `✓ All ${completed} artifact${completed !== 1 ? 's' : ''} generated`);
+  document.getElementById('progressElapsed').textContent = `✓ ${mm}:${ss}`;
+  setLoading(false);
+}
+
+function addArtifactTab(key, makeActive) {
+  const tabs = document.getElementById('artifactTabs');
+  const meta = ARTIFACT_META[key] || { label: key, icon: '📄' };
+  // Remove active from all existing tabs if making this one active
+  if (makeActive) tabs.querySelectorAll('.art-tab').forEach(t => t.classList.remove('active'));
+  const tab = document.createElement('button');
+  tab.id        = `tab-${key}`;
+  tab.className = `art-tab text-xs font-bold px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-600 ${makeActive ? 'active' : ''}`;
+  tab.innerHTML = `${meta.icon} ${meta.label}`;
+  tab.onclick   = () => switchPanel(key, tab);
+  tabs.appendChild(tab);
+  if (makeActive) switchPanel(key, tab);
+}
+
+function updateGenCount(n) {
+  document.getElementById('genCount').textContent = `${n} artifact${n !== 1 ? 's' : ''}`;
+  const banner = document.getElementById('unsavedBanner');
+  if (banner && n > 0) banner.classList.remove('hidden');
+}
+
+function readText(file) {
+  const name = file.name.toLowerCase();
+  const needsServer = name.endsWith('.docx') || name.endsWith('.pdf') ||
+                      name.endsWith('.xlsx') || name.endsWith('.xls');
+
+  if (needsServer) {
+    // Binary formats: send to server for proper extraction
+    // (readAsText on .docx returns raw ZIP bytes — garbage)
+    const fd = new FormData();
+    fd.append('file', file);
+    return fetch('/api/extract-text', { method: 'POST', body: fd })
+      .then(r => r.json())
+      .then(d => {
+        if (d.error) throw new Error(d.error);
+        return d.text;
+      });
+  }
+
+  // Plain text formats (.txt, .csv, .md) — read client-side
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = e => res(e.target.result);
+    r.onerror = rej;
+    r.readAsText(file);
+  });
+}
+
+// ── Render output ──────────────────────────────────────────────────────────────
+function renderOutput(selected) {
+  const section = document.getElementById('outputSection');
+  const tabs    = document.getElementById('artifactTabs');
+  tabs.innerHTML = '';
+
+  const keys = selected.filter(k => generatedData[k]);
+  document.getElementById('genCount').textContent = `${keys.length} artifact${keys.length!==1?'s':''}`;
+
+  // Hide all panels
+  document.querySelectorAll('.artifact-panel').forEach(p => p.classList.add('hidden'));
+
+  keys.forEach((key, i) => {
+    const meta = ARTIFACT_META[key] || { label: key, icon: '📄' };
+    const tab  = document.createElement('button');
+    tab.className = `art-tab text-xs font-bold px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-600 ${i===0?'active':''}`;
+    tab.innerHTML = `${meta.icon} ${meta.label}`;
+    tab.onclick = () => switchPanel(key, tab);
+    tabs.appendChild(tab);
+  });
+
+  // Render each
+  keys.forEach(key => renderArtifact(key, generatedData[key]));
+
+  section.classList.remove('hidden');
+  if (keys.length) switchPanel(keys[0], tabs.querySelector('.art-tab.active'));
+  section.scrollIntoView({ behavior:'smooth', block:'start' });
+
+  // Update step indicators
+  activateStep(3);
+}
+
+function switchPanel(key, tabEl) {
+  activePanel = key;
+  document.querySelectorAll('.art-tab').forEach(t => t.classList.remove('active'));
+  tabEl.classList.add('active');
+  document.querySelectorAll('.artifact-panel').forEach(p => p.classList.add('hidden'));
+  const panel = document.getElementById(`panel-${key}`);
+  if (panel) { panel.classList.remove('hidden'); panel.classList.add('fade-in'); }
+}
+
+function activateStep(n) {
+  [2,3].forEach(s => {
+    if (s <= n) {
+      document.getElementById(`step${s}num`).className = 'w-6 h-6 rounded-full bg-brand-blue text-white text-xs font-bold flex items-center justify-center shrink-0';
+      document.getElementById(`step${s}lbl`).className = 'text-sm font-semibold text-brand-blue';
+    }
+  });
+}
+
+// ── Artifact renderers ────────────────────────────────────────────────────────
+
+function renderArtifact(key, data) {
+  if      (key === 'backlog')       renderBacklog(data);
+  else if (key === 'sprint_plan')   renderSprintPlan(data);
+  else if (key === 'sprint_review') renderSprintReview(data);
+  else if (key === 'retrospective') renderRetro(data);
+  else if (key === 'risk_register') renderRisk(data);
+  else if (key === 'test_cases')    renderTestCases(data);
+}
+
+// ── Backlog ──
+function tryParseRaw(data, keys) {
+  // If server returned _raw (parse failed), attempt client-side JSON recovery
+  if (!data || typeof data._raw !== 'string') return data;
+  try {
+    const parsed = JSON.parse(data._raw);
+    for (const k of keys) { if (parsed[k]) return parsed; }
+    if (Array.isArray(parsed)) return parsed;
+    return parsed;
+  } catch(e) { return data; }
+}
+
+function renderBacklog(data) {
+  data = tryParseRaw(data, ['epics']);
+  const container = document.getElementById('backlog-content');
+  const epics = Array.isArray(data) ? data : (data.epics || []);
+  if (!epics.length) { container.innerHTML = rawTextFallback(data); return; }
+
+  container.innerHTML = epics.map((epic, ei) => `
+    <div class="border border-slate-200 rounded-xl overflow-hidden">
+      <!-- Epic header -->
+      <button onclick="toggleEpic('epic-${ei}')"
+        class="w-full flex items-center justify-between px-5 py-4 bg-slate-50 hover:bg-blue-50 transition-colors text-left">
+        <div class="flex items-center gap-3">
+          <span class="text-xs font-bold font-mono text-slate-400 bg-slate-200 rounded px-1.5 py-0.5">${esc(epic.id||`EP-${(ei+1).toString().padStart(2,'0')}`)}</span>
+          <span class="font-bold text-slate-900" contenteditable="false">${esc(epic.title||'Epic')}</span>
+        </div>
+        <div class="flex items-center gap-3">
+          <span class="text-xs text-slate-500">${(epic.stories||[]).length} stories</span>
+          <span class="text-slate-400 text-sm">▾</span>
+        </div>
+      </button>
+      ${epic.description ? `<p class="px-5 pt-3 pb-1 text-sm text-slate-500">${esc(epic.description)}</p>` : ''}
+      <!-- Stories -->
+      <div id="epic-${ei}" class="divide-y divide-slate-100">
+        ${(epic.stories||[]).map((s, si) => storyCard(s, ei, si)).join('')}
+      </div>
+    </div>`).join('');
+}
+
+function storyCard(s, ei, si) {
+  const pts  = s.story_points || s.points || '?';
+  const pri  = s.priority || 'Should Have';
+  const priClass = {'Must Have':'pri-must','Should Have':'pri-should','Could Have':'pri-could',"Won't Have":'pri-wont'}[pri] || 'pri-should';
+  const ptColor = pts <= 2 ? 'bg-emerald-100 text-emerald-700' : pts <= 5 ? 'bg-blue-100 text-blue-700' : pts <= 8 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700';
+  const ac = s.acceptance_criteria || [];
+  return `
+    <div class="px-5 py-4 bg-white hover:bg-slate-50 transition-colors">
+      <div class="flex items-start justify-between gap-4 mb-2">
+        <div class="flex items-start gap-2 flex-1">
+          <span class="text-xs font-mono font-bold text-slate-400 bg-slate-100 rounded px-1.5 py-0.5 mt-0.5 shrink-0">${esc(s.id||`US-${ei+1}${si+1}`)}</span>
+          <span class="text-sm font-semibold text-slate-800" contenteditable="false">${esc(s.title||'User story')}</span>
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+          <span class="text-xs font-bold rounded-full px-2.5 py-0.5 ${ptColor}">${pts} SP</span>
+          <span class="text-xs font-bold rounded-full px-2.5 py-0.5 ${priClass}">${esc(pri)}</span>
+        </div>
+      </div>
+      ${s.description ? `<p class="text-xs text-slate-500 ml-7 mb-2" contenteditable="false">${esc(s.description)}</p>` : ''}
+      ${ac.length ? `
+        <details class="ml-7">
+          <summary class="text-xs font-bold text-slate-400 cursor-pointer hover:text-brand-blue">Acceptance Criteria (${ac.length})</summary>
+          <ul class="mt-2 space-y-1">
+            ${ac.map(c => `<li class="text-xs text-slate-600 flex gap-2"><span class="text-emerald-500 shrink-0">✓</span><span contenteditable="false">${esc(c)}</span></li>`).join('')}
+          </ul>
+        </details>` : ''}
+    </div>`;
+}
+
+function toggleEpic(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.toggle('hidden');
+}
+
+function addEpic() {
+  if (!generatedData.backlog) generatedData.backlog = { epics: [] };
+  generatedData.backlog.epics.push({
+    id: `EP-${String(generatedData.backlog.epics.length+1).padStart(2,'0')}`,
+    title: 'New Epic', description: '', stories: []
+  });
+  renderBacklog(generatedData.backlog);
+}
+
+// ── Sprint Plan ──
+function renderSprintPlan(data) {
+  data = tryParseRaw(data, ['sprints']);
+  const container = document.getElementById('sprint_plan-content');
+  const sprints = Array.isArray(data) ? data : (data.sprints || []);
+  if (!sprints.length) { container.innerHTML = rawTextFallback(data); return; }
+
+  // Summary row
+  const info = `
+    <div class="flex flex-wrap gap-4 mb-5 p-4 bg-blue-50 border border-blue-200 rounded-xl">
+      <div class="text-center"><div class="text-2xl font-black text-brand-blue">${sprints.length}</div><div class="text-xs text-slate-500">Sprints</div></div>
+      <div class="text-center"><div class="text-2xl font-black text-brand-blue">${data.duration_weeks||2}w</div><div class="text-xs text-slate-500">Sprint Length</div></div>
+      <div class="text-center"><div class="text-2xl font-black text-brand-blue">${data.team_velocity||'—'}</div><div class="text-xs text-slate-500">Velocity / Sprint</div></div>
+      <div class="text-center"><div class="text-2xl font-black text-brand-blue">${sprints.reduce((a,s)=>a+(s.total_points||0),0)}</div><div class="text-xs text-slate-500">Total SP</div></div>
+    </div>`;
+
+  const cards = sprints.map((s, i) => {
+    const stories = s.stories || [];
+    const pts     = s.total_points || s.points || 0;
+    return `
+      <div class="sprint-card border border-slate-200 rounded-xl p-5">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <span class="w-7 h-7 rounded-lg bg-brand-blue text-white text-xs font-black flex items-center justify-center">${s.number||i+1}</span>
+            <span class="font-bold text-slate-900 text-sm">Sprint ${s.number||i+1}</span>
+            ${s.duration_weeks ? `<span class="text-xs text-slate-400">· ${s.duration_weeks}w</span>` : ''}
+          </div>
+          <span class="text-xs font-bold text-blue-700 bg-blue-50 border border-blue-200 rounded-full px-2 py-0.5">${pts} SP</span>
+        </div>
+        ${s.goal ? `<p class="text-sm text-slate-600 font-medium mb-3 pl-9" contenteditable="false">${esc(s.goal)}</p>` : ''}
+        ${stories.length ? `
+          <div class="pl-9 flex flex-wrap gap-1.5 mb-3">
+            ${stories.map(st => `<span class="text-xs font-mono bg-slate-100 text-slate-600 rounded px-2 py-0.5">${esc(typeof st==='string'?st:st.id||st)}</span>`).join('')}
+          </div>` : ''}
+        ${s.deliverable ? `
+          <div class="pl-9 flex items-start gap-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+            <span class="shrink-0">🏁</span>
+            <span contenteditable="false">${esc(s.deliverable)}</span>
+          </div>` : ''}
+      </div>`;
+  }).join('');
+
+  container.innerHTML = info + cards;
+}
+
+// ── Sprint Review ──
+function renderSprintReview(data) {
+  data = tryParseRaw(data, ['reviews']);
+  const container = document.getElementById('sprint_review-content');
+  const reviews = Array.isArray(data) ? data : (data.reviews || []);
+  if (!reviews.length) { container.innerHTML = rawTextFallback(data); return; }
+
+  container.innerHTML = reviews.map((r, i) => `
+    <div class="border border-slate-200 rounded-xl overflow-hidden">
+      <div class="bg-slate-50 px-5 py-3 flex items-center gap-3">
+        <span class="w-7 h-7 rounded-lg bg-emerald-500 text-white text-xs font-black flex items-center justify-center">${r.sprint||i+1}</span>
+        <span class="font-bold text-slate-900">Sprint ${r.sprint||i+1} Review</span>
+      </div>
+      <div class="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+        ${reviewField('📋 Planned', r.planned_stories, 'planned')}
+        ${reviewField('✅ Completed', r.completed_stories, 'completed')}
+        ${reviewText('🎯 Demo Notes', r.demo_notes)}
+        ${reviewText('💬 Stakeholder Feedback Questions', r.feedback_template)}
+        ${reviewText('➡️ Next Sprint Adjustments', r.next_sprint_adjustments)}
+      </div>
+    </div>`).join('');
+}
+
+function reviewField(label, items, cls) {
+  if (!items || !items.length) return '';
+  return `
+    <div>
+      <div class="text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">${label}</div>
+      <div class="space-y-1">
+        ${items.map(s=>`<div class="text-xs font-mono bg-slate-100 text-slate-700 rounded px-2 py-1 inline-block mr-1 mb-1">${esc(typeof s==='string'?s:s.id||s)}</div>`).join('')}
+      </div>
+    </div>`;
+}
+function reviewText(label, txt) {
+  if (!txt) return '';
+  return `
+    <div class="sm:col-span-2">
+      <div class="text-xs font-bold text-slate-500 uppercase tracking-widest mb-1">${label}</div>
+      <p class="text-sm text-slate-700 leading-relaxed" contenteditable="false">${esc(txt)}</p>
+    </div>`;
+}
+
+// ── Retrospective ──
+function renderRetro(data) {
+  data = tryParseRaw(data, ['went_well', 'improve', 'action_items']);
+  const container = document.getElementById('retrospective-content');
+  if (!data || typeof data !== 'object') { container.innerHTML = rawTextFallback(data); return; }
+  if (data._raw && !data.went_well && !data.improve && !data.action_items) { container.innerHTML = rawTextFallback(data); return; }
+  const quads = [
+    { key:'went_well',    label:'😊 What Went Well',         cls:'bg-emerald-50 border-emerald-200', headerCls:'bg-emerald-100 text-emerald-800' },
+    { key:'improve',      label:'🔧 What to Improve',        cls:'bg-amber-50  border-amber-200',   headerCls:'bg-amber-100  text-amber-800'   },
+    { key:'action_items', label:'🎯 Action Items',            cls:'bg-blue-50   border-blue-200',    headerCls:'bg-blue-100   text-blue-800'    },
+    { key:'team_health_check', label:'💪 Team Health Check',  cls:'bg-purple-50 border-purple-200',  headerCls:'bg-purple-100 text-purple-800'  },
+  ];
+
+  container.innerHTML = `
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      ${quads.map(q => {
+        const rawItems = data[q.key];
+        const items = Array.isArray(rawItems) ? rawItems : (rawItems ? [rawItems] : []);
+        return `
+          <div class="retro-quad border rounded-xl overflow-hidden ${q.cls}">
+            <div class="px-4 py-2.5 text-xs font-black uppercase tracking-widest ${q.headerCls}">${q.label}</div>
+            <ul class="p-4 space-y-2 min-h-28">
+              ${items.map(it=>{
+                const txt = (it && typeof it === 'object') ? (it.text || it.item || it.description || it.content || it.title || JSON.stringify(it)) : it;
+                return `<li class="flex items-start gap-2 text-sm text-slate-700 bg-white rounded-lg px-3 py-2 shadow-sm border border-white">
+                  <span class="text-slate-400 shrink-0 mt-0.5">•</span>
+                  <span contenteditable="false">${esc(txt)}</span>
+                </li>`;}).join('')}
+              ${!items.length ? `<li class="text-xs text-slate-400 italic p-2">No items generated</li>` : ''}
+            </ul>
+          </div>`;
+      }).join('')}
+    </div>
+    ${data.format ? `<p class="text-xs text-slate-400 mt-3 text-right">Format: ${esc(data.format)}</p>` : ''}`;
+}
+
+// ── Risk Register ──
+function renderRisk(data) {
+  const container = document.getElementById('risk_register-content');
+  // Recovery: if server returned _raw (parse failed), try client-side parse
+  if (data && data._raw && typeof data._raw === 'string') {
+    try {
+      const parsed = JSON.parse(data._raw);
+      data = Array.isArray(parsed) ? parsed : (parsed.risks || parsed);
+    } catch(e) { /* leave data as-is, rawTextFallback will show it */ }
+  }
+  const risks = Array.isArray(data) ? data : (data.risks || []);
+  if (!risks.length) { container.innerHTML = rawTextFallback(data); return; }
+
+  const sevClass = s => ({ 'Critical':'sev-critical','High':'sev-high','Medium':'sev-medium','Low':'sev-low' }[s] || 'sev-medium');
+
+  const catColor = c => ({'Scope':'bg-purple-50 text-purple-700 border-purple-200','Dev':'bg-amber-50 text-amber-700 border-amber-200','Resource':'bg-amber-50 text-amber-700 border-amber-200','Client':'bg-blue-50 text-blue-700 border-blue-200','Technical':'bg-cyan-50 text-cyan-700 border-cyan-200','Data':'bg-orange-50 text-orange-700 border-orange-200','Design':'bg-pink-50 text-pink-700 border-pink-200','Branding':'bg-pink-50 text-pink-700 border-pink-200','Governance':'bg-slate-100 text-slate-700 border-slate-200'}[c] || 'bg-slate-100 text-slate-600 border-slate-200');
+
+  container.innerHTML = `
+    <table class="w-full text-sm border-collapse">
+      <thead>
+        <tr class="bg-slate-50 border-b border-slate-200">
+          <th class="text-left px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-widest">ID</th>
+          <th class="text-left px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-widest">Category</th>
+          <th class="text-left px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-widest">Risk</th>
+          <th class="text-left px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-widest">Prob.</th>
+          <th class="text-left px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-widest">Impact</th>
+          <th class="text-left px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-widest">Severity</th>
+          <th class="text-left px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-widest">Mitigation</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        ${risks.map((r, i) => `
+          <tr class="hover:bg-slate-50 transition-colors">
+            <td class="px-4 py-3 font-mono text-xs text-slate-500 font-bold">${esc(r.id||`R-${String(i+1).padStart(2,'0')}`)}</td>
+            <td class="px-4 py-3">
+              ${r.category ? `<span class="text-xs font-bold px-2 py-0.5 rounded-full border ${catColor(r.category)}">${esc(r.category)}</span>` : '—'}
+            </td>
+            <td class="px-4 py-3">
+              <div class="font-semibold text-slate-800" contenteditable="false">${esc(r.title||r.risk||'Risk')}</div>
+              ${r.description?`<div class="text-xs text-slate-400 mt-0.5" contenteditable="false">${esc(r.description)}</div>`:''}
+            </td>
+            <td class="px-4 py-3 text-xs font-bold text-slate-600">${esc(r.probability||'M')}</td>
+            <td class="px-4 py-3 text-xs font-bold text-slate-600">${esc(r.impact||'M')}</td>
+            <td class="px-4 py-3">
+              <span class="text-xs font-bold rounded-full px-2.5 py-1 ${sevClass(r.severity)}">${esc(r.severity||'Medium')}</span>
+            </td>
+            <td class="px-4 py-3 text-xs text-slate-600 max-w-xs" contenteditable="false">${esc(r.mitigation||'')}</td>
+          </tr>`).join('')}
+      </tbody>
+    </table>`;
+}
+
+// ── Test Cases ──
+let _allTestCases = [];
+
+function renderTestCases(data) {
+  data = tryParseRaw(data, ['test_cases']);
+  const container = document.getElementById('test_cases-content');
+  const cases = Array.isArray(data) ? data : (data.test_cases || []);
+  if (!cases.length) { container.innerHTML = rawTextFallback(data); return; }
+
+  _allTestCases = cases;
+
+  // Update summary counts
+  const counts = { Unit:0, Integration:0, UAT:0 };
+  cases.forEach(c => { if (counts[c.type] !== undefined) counts[c.type]++; });
+  document.getElementById('tc-summary').textContent =
+    `${cases.length} total · ${counts.Unit} Unit · ${counts.Integration} Integration · ${counts.UAT} UAT`;
+
+  renderTCRows(cases);
+}
+
+function renderTCRows(cases) {
+  const container = document.getElementById('test_cases-content');
+
+  const typeIcon  = t => ({ Unit:'🔬', Integration:'🔗', UAT:'👤' }[t] || '🧪');
+  const typeCls   = t => ({ Unit:'bg-blue-50 border-blue-200 text-blue-700',
+                             Integration:'bg-purple-50 border-purple-200 text-purple-700',
+                             UAT:'bg-emerald-50 border-emerald-200 text-emerald-700' }[t]
+                           || 'bg-slate-50 border-slate-200 text-slate-600');
+  const priCls    = p => ({ High:'pri-must', Medium:'pri-should', Low:'pri-could' }[p] || 'pri-should');
+
+  container.innerHTML = cases.map((tc, i) => {
+    const steps = Array.isArray(tc.steps) ? tc.steps : [tc.steps || ''];
+    const pre   = Array.isArray(tc.preconditions) ? tc.preconditions : (tc.preconditions ? [tc.preconditions] : []);
+    return `
+    <div class="tc-row border border-slate-200 rounded-xl mb-3 overflow-hidden" data-type="${esc(tc.type||'')}">
+      <!-- Row header -->
+      <button onclick="toggleTC('tc-body-${i}')"
+        class="w-full flex items-center justify-between px-5 py-3.5 bg-slate-50 hover:bg-slate-100 transition-colors text-left gap-3">
+        <div class="flex items-center gap-3 flex-1 min-w-0">
+          <span class="font-mono text-xs font-bold text-slate-400 bg-white border border-slate-200 rounded px-1.5 py-0.5 shrink-0">
+            ${esc(tc.id || `TC-${String(i+1).padStart(2,'0')}`)}</span>
+          <span class="text-sm font-semibold text-slate-800 truncate" contenteditable="false">${esc(tc.title || 'Test case')}</span>
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+          <span class="text-xs font-bold rounded-full px-2.5 py-0.5 border ${typeCls(tc.type)}">${typeIcon(tc.type)} ${esc(tc.type||'Test')}</span>
+          <span class="text-xs font-bold rounded-full px-2.5 py-0.5 ${priCls(tc.priority)}">${esc(tc.priority||'Medium')}</span>
+          <span class="text-slate-400 text-sm">▾</span>
+        </div>
+      </button>
+      <!-- Row body -->
+      <div id="tc-body-${i}" class="px-5 py-4 bg-white grid grid-cols-1 sm:grid-cols-2 gap-4 hidden">
+        ${tc.feature ? `
+        <div class="sm:col-span-2">
+          <div class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Feature</div>
+          <p class="text-sm text-slate-700" contenteditable="false">${esc(tc.feature)}</p>
+        </div>` : ''}
+        ${pre.length ? `
+        <div>
+          <div class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Preconditions</div>
+          <ul class="space-y-1">
+            ${pre.map(p => `<li class="text-xs text-slate-600 flex gap-2"><span class="text-amber-500 shrink-0">→</span><span contenteditable="false">${esc(p)}</span></li>`).join('')}
+          </ul>
+        </div>` : ''}
+        <div>
+          <div class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Test Steps</div>
+          <ol class="space-y-1 list-none">
+            ${steps.map((s,si) => `
+            <li class="text-xs text-slate-700 flex gap-2">
+              <span class="w-5 h-5 rounded-full bg-brand-blue text-white font-bold text-xs flex items-center justify-center shrink-0">${si+1}</span>
+              <span contenteditable="false">${esc(s)}</span>
+            </li>`).join('')}
+          </ol>
+        </div>
+        ${tc.expected_result ? `
+        <div class="${pre.length ? '' : ''}">
+          <div class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Expected Result</div>
+          <div class="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2" contenteditable="false">
+            ✓ ${esc(tc.expected_result)}
+          </div>
+        </div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function toggleTC(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.toggle('hidden');
+}
+
+function filterTC(type) {
+  // Update pill styles
+  document.querySelectorAll('.tc-filter').forEach(btn => {
+    const isActive = btn.dataset.type === type;
+    btn.className = `tc-filter text-xs font-bold px-3 py-1.5 rounded-full border transition-colors ${
+      isActive ? 'border-brand-blue bg-brand-blue text-white'
+               : 'border-slate-200 bg-white text-slate-600 hover:border-blue-300'}`;
+  });
+
+  const filtered = type === 'all'
+    ? _allTestCases
+    : _allTestCases.filter(tc => tc.type === type);
+  renderTCRows(filtered);
+}
+
+// ── Edit mode ──────────────────────────────────────────────────────────────────
+function toggleEdit(key) {
+  const panel = document.getElementById(`panel-${key}`);
+  const btn   = document.getElementById(`edit-${key}-btn`);
+  const on    = !editModes[key];
+  editModes[key] = on;
+  panel.querySelectorAll('[contenteditable]').forEach(el => {
+    el.contentEditable = on ? 'true' : 'false';
+    el.classList.toggle('bg-yellow-50', on);
+    el.classList.toggle('rounded', on);
+    el.classList.toggle('px-1', on);
+  });
+  btn.textContent = on ? '💾 Save' : '✏️ Edit';
+  btn.classList.toggle('bg-amber-50', on);
+  btn.classList.toggle('border-amber-200', on);
+  btn.classList.toggle('text-amber-700', on);
+  btn.classList.toggle('bg-blue-50', !on);
+  btn.classList.toggle('border-blue-200', !on);
+  btn.classList.toggle('text-brand-blue', !on);
+}
+
+// ── Copy / Download ────────────────────────────────────────────────────────────
+function buildPlainText() {
+  const lines = [];
+  for (const [key, data] of Object.entries(generatedData)) {
+    const meta = ARTIFACT_META[key] || { label: key };
+    lines.push('═'.repeat(50));
+    lines.push(meta.label.toUpperCase());
+    lines.push('═'.repeat(50));
+    lines.push('');
+
+    if (key === 'backlog') {
+      for (const epic of (data.epics || [])) {
+        lines.push(`[${epic.id || 'EP'}] ${epic.title || 'Epic'}`);
+        if (epic.description) lines.push(`  ${epic.description}`);
+        for (const s of (epic.stories || [])) {
+          const pts = s.story_points || s.points || '?';
+          lines.push(`  • [${s.id || 'US'}] ${s.title}  [${pts} SP]  [${s.priority || ''}]`);
+          if (s.description) lines.push(`    ${s.description}`);
+          for (const ac of (s.acceptance_criteria || [])) lines.push(`    ✓ ${ac}`);
+        }
+        lines.push('');
+      }
+    } else if (key === 'sprint_plan') {
+      for (const s of (data.sprints || [])) {
+        lines.push(`Sprint ${s.number || ''}  [${s.total_points || s.points || 0} SP]`);
+        if (s.goal) lines.push(`  Goal: ${s.goal}`);
+        if (s.stories?.length) lines.push(`  Stories: ${s.stories.map(st => typeof st === 'string' ? st : (st.id || st)).join(', ')}`);
+        if (s.deliverable) lines.push(`  Deliverable: ${s.deliverable}`);
+        lines.push('');
+      }
+    } else if (key === 'sprint_review') {
+      const reviews = Array.isArray(data) ? data : (data.reviews || []);
+      for (const r of reviews) {
+        lines.push(`Sprint ${r.sprint || ''} Review`);
+        if (r.planned_stories?.length)   lines.push(`  Planned:    ${r.planned_stories.join(', ')}`);
+        if (r.completed_stories?.length) lines.push(`  Completed:  ${r.completed_stories.join(', ')}`);
+        if (r.demo_notes)                lines.push(`  Demo Notes: ${r.demo_notes}`);
+        if (r.feedback_template)         lines.push(`  Stakeholder Feedback: ${r.feedback_template}`);
+        if (r.next_sprint_adjustments)   lines.push(`  Next Sprint: ${r.next_sprint_adjustments}`);
+        lines.push('');
+      }
+    } else if (key === 'retrospective') {
+      for (const [field, label] of [['went_well','What Went Well'],['improve','What to Improve'],
+                                     ['action_items','Action Items'],['team_health_check','Team Health Check']]) {
+        const items = data[field] || [];
+        if (items.length) { lines.push(label + ':'); items.forEach(it => lines.push(`  • ${it}`)); lines.push(''); }
+      }
+    } else if (key === 'risk_register') {
+      const risks = Array.isArray(data) ? data : (data.risks || []);
+      for (const r of risks) {
+        lines.push(`[${r.id || 'R'}] ${r.title || r.risk || 'Risk'}  [Severity: ${r.severity || 'Medium'}]`);
+        if (r.description) lines.push(`  ${r.description}`);
+        lines.push(`  Probability: ${r.probability || 'M'}  |  Impact: ${r.impact || 'M'}`);
+        if (r.mitigation) lines.push(`  Mitigation: ${r.mitigation}`);
+        lines.push('');
+      }
+    } else if (key === 'test_cases') {
+      const cases = Array.isArray(data) ? data : (data.test_cases || []);
+      for (const tc of cases) {
+        lines.push(`[${tc.id || 'TC'}] ${tc.title || 'Test Case'}  [${tc.type || ''}]`);
+        if (tc.precondition) lines.push(`  Pre: ${tc.precondition}`);
+        (tc.steps || []).forEach((step, i) => lines.push(`  ${i+1}. ${step}`));
+        if (tc.expected_result) lines.push(`  Expected: ${tc.expected_result}`);
+        lines.push('');
+      }
+    } else {
+      lines.push(typeof data === 'string' ? data : JSON.stringify(data, null, 2));
+    }
+    lines.push('');
+  }
+  return lines.join('\n');
+}
+
+function copyAll() {
+  const btn = document.getElementById('btnCopy');
+  navigator.clipboard.writeText(buildPlainText()).then(() => {
+    if (btn) { const orig = btn.innerHTML; btn.innerHTML = '✓ Copied!'; setTimeout(() => btn.innerHTML = orig, 2000); }
+  }).catch(() => {});
+}
+
+async function downloadAll() {
+  const btn = document.getElementById('btnDownload');
+  if (btn) btn.innerHTML = '⏳ Generating…';
+  try {
+    const artifactLabel = activePanel ? (ARTIFACT_META[activePanel]?.label || activePanel) : 'Agile Project Documents';
+    const resp = await fetch('/api/download-docx', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        data: generatedData,
+        project_name: projectName,
+        artifact_label: artifactLabel
+      })
+    });
+    if (!resp.ok) throw new Error('Server error');
+    const blob = await resp.blob();
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url;
+    a.download = `${artifactLabel}${projectName ? ' - ' + projectName : ''}.docx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch(e) {
+    console.error('Download failed:', e);
+  } finally {
+    if (btn) btn.innerHTML = '↓ Download .docx';
+  }
+}
+
+function downloadJSON() {
+  if (!Object.keys(generatedData).length) return;
+  const btn = document.getElementById('btnDownloadJSON');
+  const payload = {
+    project: projectName || 'Agile Project',
+    generated_at: new Date().toISOString(),
+    artifacts: generatedData
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url;
+  a.download = `${projectName || 'agile-project'}-artifacts.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  const banner = document.getElementById('unsavedBanner');
+  if (banner) banner.classList.add('hidden');
+  if (btn) { const orig = btn.innerHTML; btn.innerHTML = '✓ Saved!'; setTimeout(() => btn.innerHTML = orig, 2000); }
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+function rawTextFallback(data) {
+  const txt = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+  return `<pre class="text-xs font-mono text-slate-700 bg-slate-50 rounded-xl p-5 overflow-auto max-h-96 whitespace-pre-wrap">${esc(txt)}</pre>`;
+}
+
+function setLoading(on) {
+  const btn = document.getElementById('generateBtn');
+  btn.disabled = on;
+  document.getElementById('btnSpinner').classList.toggle('hidden', !on);
+  document.getElementById('btnLabel').textContent = on ? 'Generating…' : 'Generate Project Documents';
+  // Keep progress bar visible after done so user sees final time + 100%
+  // It only hides when a new generation starts (reset in generateDocs)
+  if (on) document.getElementById('progressWrap').classList.remove('hidden');
+}
+
+function showError(msg) {
+  const b = document.getElementById('errorBox');
+  document.getElementById('errorMsg').textContent = msg;
+  b.classList.remove('hidden');
+  b.scrollIntoView({ behavior:'smooth', block:'nearest' });
+}
+
+function hideError() {
+  document.getElementById('errorBox').classList.add('hidden');
+}
+
+// Init
+updateSelAll();
+activateStep(2);
+
+// ── Navigation warning ────────────────────────────────────────────────────────
+let _pendingNavUrl = null;
+
+function hasUnsavedOutput() {
+  return Object.keys(generatedData).length > 0;
+}
+
+function interceptNav(e, url) {
+  if (!hasUnsavedOutput()) return true; // no output — allow navigation
+  e.preventDefault();
+  _pendingNavUrl = url;
+  document.getElementById('navWarnModal').classList.remove('hidden');
+  return false;
+}
+
+function cancelNav() {
+  _pendingNavUrl = null;
+  document.getElementById('navWarnModal').classList.add('hidden');
+}
+
+function confirmNav() {
+  document.getElementById('navWarnModal').classList.add('hidden');
+  if (_pendingNavUrl) window.location.href = _pendingNavUrl;
+}
+
+async function triggerDocxThenNav() {
+  document.getElementById('navWarnModal').classList.add('hidden');
+  // Trigger download
+  const keys = Object.keys(generatedData);
+  if (keys.length) {
+    try {
+      const res = await fetch('/api/download-docx', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ artifacts: generatedData, project_name: projectName })
+      });
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = (projectName ? projectName + ' - ' : '') + 'Agile Suite.docx';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch(e) { console.warn('Download failed:', e); }
+  }
+  setTimeout(() => { if (_pendingNavUrl) window.location.href = _pendingNavUrl; }, 600);
+}
+
+// Warn on browser back/close
+window.addEventListener('beforeunload', e => {
+  if (hasUnsavedOutput()) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
+
+// ── Refine with AI ────────────────────────────────────────────────────────────
+const ARTIFACT_LABELS = {
+  backlog: 'Product Backlog', sprint_plan: 'Sprint Planning',
+  sprint_review: 'Sprint Reviews', retrospective: 'Retrospective',
+  risk_register: 'Risk Register', test_cases: 'Test Cases'
+};
+
+let _refineKey = null;
+
+function openRefineModal(key) {
+  _refineKey = key;
+  const label = ARTIFACT_LABELS[key] || key;
+  document.getElementById('refineModalSubtitle').textContent = `Improve: ${label}`;
+  document.getElementById('refineFeedback').value = '';
+  const preview = `Review the generated ${label} and regenerate a more detailed and comprehensive version with additional relevant entries.`;
+  document.getElementById('refinePromptPreview').textContent = preview;
+
+  // Populate current output preview
+  const previewEl = document.getElementById('refineCurrentPreview');
+  const data = generatedData[key];
+  if (data) {
+    previewEl.innerHTML = buildRefinePreview(key, data);
+  } else {
+    previewEl.innerHTML = '<p class="text-slate-400 italic text-xs">No output yet — generate first, then refine.</p>';
+  }
+
+  document.getElementById('refineModal').classList.remove('hidden');
+}
+
+function buildRefinePreview(key, data) {
+  // Build a compact, readable HTML preview of the current artifact data
+  try {
+    if (key === 'retrospective') {
+      const sections = ['went_well','improve','action_items','team_health_check'];
+      const labels   = {'went_well':'😊 What Went Well','improve':'🔧 What to Improve','action_items':'🎯 Action Items','team_health_check':'💪 Team Health'};
+      return sections.map(s => {
+        const items = Array.isArray(data[s]) ? data[s] : [];
+        if (!items.length) return '';
+        return `<div class="mb-3"><div class="text-xs font-bold text-slate-500 uppercase mb-1">${labels[s]||s}</div><ul class="space-y-1">${
+          items.slice(0,5).map(it => {
+            const t = (it && typeof it==='object') ? (it.text||it.item||it.description||JSON.stringify(it)) : it;
+            return `<li class="text-xs text-slate-600 flex gap-1.5"><span class="text-slate-300 shrink-0">•</span><span>${esc(t)}</span></li>`;
+          }).join('')
+        }${items.length>5 ? `<li class="text-xs text-slate-400 italic">…and ${items.length-5} more</li>` : ''}</ul></div>`;
+      }).join('');
+    }
+    if (key === 'risk_register') {
+      const risks = Array.isArray(data) ? data : (data.risks || []);
+      return risks.map(r => `<div class="mb-2 pb-2 border-b border-slate-100 last:border-0">
+        <div class="flex items-center gap-2 mb-0.5">
+          <span class="text-xs font-mono font-bold text-slate-500">${esc(r.id||'')}</span>
+          <span class="text-xs font-semibold text-slate-700">${esc(r.title||r.risk||'')}</span>
+          <span class="text-xs px-1.5 py-0.5 rounded-full ${r.severity==='Critical'?'bg-red-100 text-red-700':r.severity==='High'?'bg-orange-100 text-orange-700':'bg-slate-100 text-slate-600'}">${esc(r.severity||'')}</span>
+        </div>
+        <p class="text-xs text-slate-500">${esc(r.description||'')}</p>
+      </div>`).join('');
+    }
+    if (key === 'backlog') {
+      const epics = Array.isArray(data) ? data : (data.epics || []);
+      return epics.map(ep => `<div class="mb-3">
+        <div class="font-semibold text-xs text-slate-700 mb-1"><span class="font-mono text-slate-400 mr-1">${esc(ep.id||'')}</span>${esc(ep.title||'')}</div>
+        <ul class="space-y-0.5 pl-3">${(ep.stories||[]).slice(0,4).map(st =>
+          `<li class="text-xs text-slate-500 flex gap-1"><span class="font-mono text-slate-300">${esc(st.id||'')}</span><span>${esc(st.title||st.description||'')}</span></li>`
+        ).join('')}${(ep.stories||[]).length>4?`<li class="text-xs text-slate-400 italic">…+${(ep.stories||[]).length-4} more stories</li>`:''}</ul>
+      </div>`).join('');
+    }
+    if (key === 'sprint_plan') {
+      const sprints = Array.isArray(data) ? data : (data.sprints || []);
+      return sprints.map(sp => `<div class="mb-3 pb-2 border-b border-slate-100 last:border-0">
+        <div class="font-semibold text-xs text-slate-700 mb-1">${esc(sp.name||sp.sprint||'Sprint')}</div>
+        <div class="text-xs text-slate-500 mb-1">Goal: ${esc(sp.goal||sp.sprint_goal||'')}</div>
+        <div class="flex flex-wrap gap-1">${(sp.stories||sp.user_stories||[]).slice(0,5).map(s =>
+          `<span class="text-xs font-mono bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">${esc(typeof s==='string'?s:s.id||s.story_id||'')}</span>`
+        ).join('')}${(sp.stories||sp.user_stories||[]).length>5?`<span class="text-xs text-slate-400">…</span>`:''}</div>
+      </div>`).join('');
+    }
+    if (key === 'sprint_review') {
+      const reviews = Array.isArray(data) ? data : (data.reviews || []);
+      return reviews.map(rv => `<div class="mb-3 pb-2 border-b border-slate-100 last:border-0">
+        <div class="font-semibold text-xs text-slate-700 mb-1">${esc(rv.sprint||rv.name||'Review')}</div>
+        ${rv.demo_notes||rv.demo ? `<div class="text-xs text-slate-500 mb-1">🎯 ${esc(rv.demo_notes||rv.demo||'')}</div>` : ''}
+        ${rv.next_sprint_adjustments||rv.next_steps ? `<div class="text-xs text-slate-400">➡️ ${esc(rv.next_sprint_adjustments||rv.next_steps||'')}</div>` : ''}
+      </div>`).join('');
+    }
+    if (key === 'test_cases') {
+      const cases = Array.isArray(data) ? data : (data.test_cases || []);
+      return cases.map(tc => `<div class="mb-2 pb-2 border-b border-slate-100 last:border-0">
+        <div class="flex items-center gap-2 mb-0.5">
+          <span class="text-xs font-mono text-slate-400">${esc(tc.id||'')}</span>
+          <span class="text-xs font-semibold text-slate-700">${esc(tc.title||tc.name||'')}</span>
+          <span class="text-xs px-1.5 rounded-full bg-slate-100 text-slate-500">${esc(tc.type||'')}</span>
+        </div>
+        <p class="text-xs text-slate-500">${esc(tc.expected_result||tc.expected||'')}</p>
+      </div>`).join('');
+    }
+    // Fallback: raw JSON
+    return `<pre class="text-xs font-mono text-slate-500 whitespace-pre-wrap">${esc(JSON.stringify(data, null, 2).slice(0, 1200))}</pre>`;
+  } catch(e) {
+    return `<p class="text-xs text-slate-400 italic">Preview unavailable.</p>`;
+  }
+}
+
+function closeRefineModal() {
+  document.getElementById('refineModal').classList.add('hidden');
+  _refineKey = null;
+}
+
+function copyRefinePrompt() {
+  const label    = ARTIFACT_LABELS[_refineKey] || _refineKey;
+  const feedback = document.getElementById('refineFeedback').value.trim();
+  const current  = generatedData[_refineKey] ? JSON.stringify(generatedData[_refineKey]).slice(0, 800) : '';
+  const prompt   = `Review the generated ${label} shown below and regenerate a more detailed and comprehensive version with additional relevant entries.\n` +
+    (feedback ? `\nFeedback: ${feedback}\n` : '') +
+    (current  ? `\nCurrent output (partial):\n${current}\n` : '') +
+    `\nPlease provide a complete, improved ${label} in JSON format.`;
+  navigator.clipboard.writeText(prompt).then(() => {
+    const btn = event.target;
+    btn.textContent = '✅ Copied!';
+    setTimeout(() => btn.textContent = '📋 Copy Prompt', 2000);
+  });
+}
+
+async function runRefine() {
+  if (!_refineKey) return;
+  const btn      = document.getElementById('refineRunBtn');
+  const label    = ARTIFACT_LABELS[_refineKey] || _refineKey;
+  const feedback = document.getElementById('refineFeedback').value.trim();
+  const current  = generatedData[_refineKey] ? JSON.stringify(generatedData[_refineKey]) : '';
+
+  btn.disabled   = true;
+  btn.innerHTML  = '<span class="spin inline-block">⟳</span> Refining…';
+
+  try {
+    const res = await fetch('/api/refine-artifact', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        artifact:        _refineKey,
+        source:          sourceText,
+        current_output:  current,
+        feedback:        feedback
+      })
+    });
+    const d = await res.json();
+    if (!res.ok || d.error) throw new Error(d.error || 'Refine failed');
+
+    generatedData[_refineKey] = d.data;
+    renderArtifact(_refineKey, d.data);
+    closeRefineModal();
+    // Flash the tab
+    const tab = document.querySelector(`.art-tab[data-key="${_refineKey}"]`);
+    if (tab) { tab.style.background='#7c3aed'; tab.style.color='#fff'; setTimeout(()=>{ tab.style.background=''; tab.style.color=''; }, 1000); }
+  } catch(e) {
+    alert(`Refine failed: ${e.message}`);
+  } finally {
+    btn.disabled  = false;
+    btn.innerHTML = '✨ Refine with Local AI';
+  }
+}
+
+// Keep sourceText accessible for refine (it's set during generation)
+let sourceText = '';
+</script>
+</body>
+</html>
