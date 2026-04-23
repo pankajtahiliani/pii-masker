@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chat Assistant — Agile Suite</title>
+<link rel="icon" href="/static/agile-logo.svg" type="image/svg+xml">
+<script src="https://unpkg.com/@tailwindcss/browser@4"></script>
+<style type="text/tailwindcss">
+  @theme {
+    --color-brand-red: #dc2626;
+    --color-brand-blue: #1d4ed8;
+    --color-brand-teal: #0d9488;
+    --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  }
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+  body { font-family: 'Inter', sans-serif; }
+
+  /* ── Bubbles ─────────────────────────────────────────────────────── */
+  .msg-user {
+    background: #0d9488; color: white;
+    border-radius: 18px 18px 4px 18px;
+    position: relative;
+  }
+  .msg-assistant {
+    background: white; color: #0f172a;
+    border-radius: 18px 18px 18px 4px;
+    border: 1px solid #e2e8f0;
+  }
+
+  /* Markdown inside assistant bubbles */
+  .msg-assistant p { margin: 0 0 .5em; }
+  .msg-assistant p:last-child { margin-bottom: 0; }
+  .msg-assistant ul, .msg-assistant ol { padding-left: 1.5em; margin: .4em 0; }
+  .msg-assistant li { margin: .2em 0; }
+  .msg-assistant code { background:#f1f5f9; padding:2px 6px; border-radius:4px; font-size:.85em; font-family:monospace; }
+  .msg-assistant pre { background:#f1f5f9; padding:.75em 1em; border-radius:8px; overflow-x:auto; margin:.5em 0; }
+  .msg-assistant pre code { background:none; padding:0; }
+  .msg-assistant h1,.msg-assistant h2,.msg-assistant h3 { font-weight:700; margin:.75em 0 .25em; line-height:1.3; }
+  .msg-assistant h1 { font-size:1.1em; }
+  .msg-assistant h2 { font-size:1em; }
+  .msg-assistant h3 { font-size:.95em; }
+  .msg-assistant strong { font-weight:600; }
+  .msg-assistant em { font-style:italic; }
+  .msg-assistant blockquote { border-left:3px solid #0d9488; padding-left:.75em; margin:.5em 0; color:#64748b; }
+  .msg-assistant table { border-collapse:collapse; width:100%; margin:.5em 0; font-size:.875em; }
+  .msg-assistant th,.msg-assistant td { border:1px solid #e2e8f0; padding:.35em .75em; text-align:left; }
+  .msg-assistant th { background:#f8fafc; font-weight:600; }
+  .msg-assistant a { color:#0d9488; text-decoration:underline; }
+  .msg-assistant hr { border:none; border-top:1px solid #e2e8f0; margin:.75em 0; }
+
+  /* ── Streaming cursor ───────────────────────────────────────────── */
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+  .streaming-cursor::after { content:'▊'; animation:blink .9s infinite; font-size:.8em; color:#0d9488; }
+
+  /* ── Edit button (shows on row hover) ───────────────────────────── */
+  .edit-trigger { opacity:0; transition:opacity .15s; }
+  .msg-row:hover .edit-trigger { opacity:1; }
+
+  /* ── Edit inline textarea ───────────────────────────────────────── */
+  .edit-textarea {
+    width:100%; background:rgba(255,255,255,.15);
+    color:white; border:1px solid rgba(255,255,255,.3);
+    border-radius:8px; padding:.5em .75em;
+    font-size:.875em; line-height:1.5;
+    resize:none; outline:none; font-family:inherit;
+    min-height:56px;
+  }
+  .edit-textarea:focus { border-color:rgba(255,255,255,.7); }
+  .edit-textarea::placeholder { color:rgba(255,255,255,.5); }
+
+  /* ── Animations ─────────────────────────────────────────────────── */
+  @keyframes fadeIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:none} }
+  .fade-in { animation:fadeIn .2s ease; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .pulse { animation:pulse 2s infinite; }
+
+  /* ── Scrollbars ─────────────────────────────────────────────────── */
+  #chatMessages { scrollbar-width:thin; scrollbar-color:#cbd5e1 transparent; }
+  #chatMessages::-webkit-scrollbar { width:5px; }
+  #chatMessages::-webkit-scrollbar-thumb { background:#cbd5e1; border-radius:4px; }
+  #msgInput { scrollbar-width:thin; }
+</style>
+</head>
+<body class="bg-slate-50 min-h-screen flex flex-col">
+
+<!-- ── Header ─────────────────────────────────────────────────────────── -->
+<header class="bg-white border-b border-slate-200 sticky top-0 z-30">
+  <div class="max-w-4xl mx-auto px-6 py-3.5 flex items-center justify-between">
+    <div class="flex items-center gap-4">
+      <a href="/" class="flex items-center gap-1.5 text-xs font-semibold text-slate-400 hover:text-teal-600 transition-colors">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
+        </svg>Home
+      </a>
+      <span class="text-slate-200">|</span>
+      <a href="/"><img src="/static/agile-logo.svg" alt="Agile Suite" class="h-8"></a>
+    </div>
+    <div class="flex items-center gap-2 text-xs font-semibold px-3 py-1.5 bg-slate-100 border border-slate-200 rounded-full text-slate-500">
+      <span id="statusDot" class="w-2 h-2 rounded-full bg-slate-300 inline-block pulse"></span>
+      <span id="statusText">Checking AI…</span>
+    </div>
+  </div>
+</header>
+
+<!-- ── Main ───────────────────────────────────────────────────────────── -->
+<main class="flex-1 flex flex-col max-w-4xl mx-auto w-full px-4" style="height:calc(100vh - 57px);overflow:hidden;">
+
+  <!-- Toolbar -->
+  <div class="flex items-center justify-between py-3 border-b border-slate-100 shrink-0">
+    <div class="flex items-center gap-3">
+      <div class="w-9 h-9 rounded-xl bg-teal-50 border border-teal-200 flex items-center justify-center text-lg shrink-0">💬</div>
+      <div>
+        <h1 class="text-lg font-black text-slate-900 tracking-tight leading-none">Chat Assistant</h1>
+        <p class="text-xs text-slate-400 mt-0.5">Ask anything — estimation, user stories, risks, requirements</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-2">
+      <button onclick="downloadDocx()"
+        class="text-xs font-semibold text-slate-500 bg-white border border-slate-200 hover:border-teal-400 hover:text-teal-600 rounded-lg px-3 py-1.5 transition-colors">
+        ↓ DOCX
+      </button>
+      <button onclick="newChat()"
+        class="text-xs font-semibold text-white bg-teal-600 hover:bg-teal-700 rounded-lg px-3 py-1.5 transition-colors">
+        + New Chat
+      </button>
+    </div>
+  </div>
+
+  <!-- Message thread -->
+  <div id="chatMessages" class="flex-1 overflow-y-auto py-5 flex flex-col gap-4">
+    <div id="welcomeMsg" class="flex items-start gap-3 fade-in">
+      <div class="w-8 h-8 rounded-full bg-teal-100 border border-teal-200 flex items-center justify-center text-sm shrink-0 mt-0.5">🤖</div>
+      <div class="msg-assistant px-4 py-3 max-w-2xl text-sm leading-relaxed">
+        Hello! I'm your AI assistant. Describe your project, paste requirements, ask for effort estimates, user stories, risk analysis — whatever you need.
+      </div>
+    </div>
+  </div>
+
+  <!-- Input bar -->
+  <div class="border-t border-slate-200 bg-slate-50 py-3 shrink-0">
+    <div class="flex gap-3 items-end">
+      <div class="flex-1 bg-white border border-slate-200 rounded-2xl focus-within:border-teal-400 focus-within:ring-1 focus-within:ring-teal-100 transition-all shadow-sm">
+        <textarea id="msgInput" rows="1"
+          placeholder="Type your message… (Enter to send, Shift+Enter for new line)"
+          class="w-full px-4 py-3 text-sm bg-transparent resize-none outline-none leading-relaxed rounded-2xl"
+          style="max-height:150px;overflow-y:auto;"
+          oninput="autoResize(this)" onkeydown="handleKey(event)"></textarea>
+      </div>
+      <!-- Stop button (visible during streaming) -->
+      <button id="stopBtn" onclick="stopGeneration()" title="Stop generation"
+        class="hidden shrink-0 w-10 h-10 rounded-xl bg-red-500 hover:bg-red-600 text-white flex items-center justify-center transition-colors">
+        <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+          <rect x="6" y="6" width="12" height="12" rx="2"/>
+        </svg>
+      </button>
+      <!-- Send button (visible when idle) -->
+      <button id="sendBtn" onclick="sendMessage()" title="Send message"
+        class="shrink-0 w-10 h-10 rounded-xl bg-teal-600 hover:bg-teal-700 active:bg-teal-800 text-white flex items-center justify-center transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14M12 5l7 7-7 7"/>
+        </svg>
+      </button>
+    </div>
+    <p class="text-xs text-slate-300 mt-1.5 px-1">All processing is local · llama.cpp · Qwen2.5</p>
+  </div>
+
+</main>
+
+<script>
+marked.setOptions({ breaks: true, gfm: true });
+
+// ── Session state ─────────────────────────────────────────────────────────
+let sessionId      = localStorage.getItem('chatSessionId') || newUUID();
+let sessionMsgCount = 0;   // mirrors _CHAT_SESSIONS[sessionId].length on server
+let abortController = null;
+let isStreaming     = false;
+
+localStorage.setItem('chatSessionId', sessionId);
+
+function newUUID() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0;
+    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+  });
+}
+
+// ── Status ────────────────────────────────────────────────────────────────
+async function checkStatus() {
+  try {
+    const d = await fetch('/api/status').then(r => r.json());
+    const ok = (d.llama_server && d.llama_server.available) || d.cloud_enabled;
+    const dot = document.getElementById('statusDot');
+    dot.className = `w-2 h-2 rounded-full inline-block ${ok ? 'bg-green-500' : 'bg-amber-400'}`;
+    document.getElementById('statusText').textContent =
+      ok ? (d.cloud_enabled ? 'Cloud AI ready' : 'AI ready') : 'AI offline';
+  } catch {
+    document.getElementById('statusDot').className = 'w-2 h-2 rounded-full bg-red-400 inline-block';
+    document.getElementById('statusText').textContent = 'Offline';
+  }
+}
+checkStatus();
+setInterval(checkStatus, 30000);
+
+// ── Session restore on page load ──────────────────────────────────────────
+(async function loadSession() {
+  try {
+    const d = await fetch(`/api/chat/session?session_id=${encodeURIComponent(sessionId)}`).then(r => r.json());
+    if (!d.messages || d.messages.length === 0) return;
+    document.getElementById('welcomeMsg')?.remove();
+    d.messages.forEach((msg, idx) => {
+      if (msg.role === 'user') {
+        appendUserBubble(msg.content, idx);
+      } else if (msg.role === 'assistant') {
+        const { wrap, inner } = _createAssistantBubble();
+        wrap.dataset.sessionIdx = idx;
+        renderBubble(inner, msg.content, true);
+        document.getElementById('chatMessages').appendChild(wrap);
+      }
+    });
+    sessionMsgCount = d.messages.length;
+    scrollBottom();
+  } catch { /* fresh session */ }
+})();
+
+// ── Bubble creation ───────────────────────────────────────────────────────
+function appendUserBubble(text, sessionIdx) {
+  const msgs = document.getElementById('chatMessages');
+  const wrap = document.createElement('div');
+  wrap.className = 'msg-row flex items-start gap-2 justify-end fade-in';
+  wrap.dataset.sessionIdx = String(sessionIdx);
+
+  // Edit trigger (pencil) — sits between edit zone and bubble
+  const editBtn = document.createElement('button');
+  editBtn.className = 'edit-trigger self-center w-6 h-6 rounded-full bg-teal-100 border border-teal-200 hover:bg-teal-200 flex items-center justify-center text-teal-600 shrink-0 transition-colors';
+  editBtn.title = 'Edit message';
+  editBtn.innerHTML = `<svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+    <path stroke-linecap="round" stroke-linejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/>
+  </svg>`;
+  editBtn.addEventListener('click', () => startEdit(wrap));
+
+  const bubble = document.createElement('div');
+  bubble.className = 'msg-user px-4 py-3 max-w-2xl text-sm leading-relaxed';
+  bubble.innerHTML = `<span class="bubble-text whitespace-pre-wrap">${escHtml(text)}</span>`;
+
+  const avatar = document.createElement('div');
+  avatar.className = 'w-8 h-8 rounded-full bg-teal-600 flex items-center justify-center text-xs text-white shrink-0 mt-0.5 font-bold';
+  avatar.textContent = 'You';
+
+  wrap.appendChild(editBtn);
+  wrap.appendChild(bubble);
+  wrap.appendChild(avatar);
+  msgs.appendChild(wrap);
+  scrollBottom();
+  return { wrap, bubble };
+}
+
+function _createAssistantBubble() {
+  const wrap  = document.createElement('div');
+  wrap.className = 'flex items-start gap-3 fade-in';
+  wrap.dataset.sessionIdx = '-1'; // set on success
+  const inner = document.createElement('div');
+  inner.className = 'msg-assistant px-4 py-3 max-w-2xl text-sm leading-relaxed streaming-cursor';
+  inner.innerHTML = '<span class="text-slate-300 text-xs">Thinking…</span>';
+  const avWrap = document.createElement('div');
+  avWrap.className = 'w-8 h-8 rounded-full bg-teal-100 border border-teal-200 flex items-center justify-center text-sm shrink-0 mt-0.5';
+  avWrap.textContent = '🤖';
+  wrap.appendChild(avWrap);
+  wrap.appendChild(inner);
+  return { wrap, inner };
+}
+
+function appendAssistantBubble() {
+  const { wrap, inner } = _createAssistantBubble();
+  document.getElementById('chatMessages').appendChild(wrap);
+  scrollBottom();
+  return { wrap, inner };
+}
+
+function renderBubble(el, rawText, done = false) {
+  if (done) el.classList.remove('streaming-cursor');
+  el.innerHTML = rawText ? marked.parse(rawText) : '';
+  scrollBottom();
+}
+
+// ── Sending ───────────────────────────────────────────────────────────────
+async function sendMessage() {
+  const input = document.getElementById('msgInput');
+  const text  = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  input.style.height = 'auto';
+  await _sendText(text);
+}
+
+async function _sendText(message) {
+  if (isStreaming) return;
+
+  document.getElementById('welcomeMsg')?.remove();
+
+  const userIdx          = sessionMsgCount;
+  const { wrap: uWrap }  = appendUserBubble(message, userIdx);
+  const { wrap: aWrap, inner: aEl } = appendAssistantBubble();
+
+  abortController = new AbortController();
+  _setStreaming(true);
+
+  let fullText = '';
+  let normalExit = false;
+
+  try {
+    const resp = await fetch('/api/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, message }),
+      signal: abortController.signal,
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ error: 'Request failed' }));
+      renderBubble(aEl, `**Error:** ${err.error || 'Request failed'}`, true);
+      _markOrphaned(uWrap, aWrap);
+      return;
+    }
+
+    const reader  = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    outer: while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const raw = line.slice(6).trim();
+        if (raw === '[DONE]') { normalExit = true; break outer; }
+        try {
+          const { token, error } = JSON.parse(raw);
+          if (error) { renderBubble(aEl, `**Error:** ${escHtml(error)}`, true); _markOrphaned(uWrap, aWrap); return; }
+          if (token) { fullText += token; renderBubble(aEl, fullText, false); }
+        } catch { /* ignore partial chunk parse errors */ }
+      }
+    }
+
+    renderBubble(aEl, fullText, true);
+
+    if (normalExit) {
+      // Server saved the assistant response — update client counts
+      uWrap.dataset.sessionIdx = String(userIdx);
+      aWrap.dataset.sessionIdx = String(userIdx + 1);
+      sessionMsgCount += 2;
+    } else {
+      _markOrphaned(uWrap, aWrap); // stream ended without [DONE]
+    }
+
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      // User clicked Stop — server session cleanup via /api/chat/stop
+      fetch('/api/chat/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId }),
+      }).catch(() => {});
+      renderBubble(aEl, (fullText ? fullText + '\n\n' : '') + '_— Generation stopped —_', true);
+      _markOrphaned(uWrap, aWrap);
+    } else {
+      renderBubble(aEl, `**Network error:** ${escHtml(e.message)}`, true);
+      _markOrphaned(uWrap, aWrap);
+    }
+  } finally {
+    abortController = null;
+    _setStreaming(false);
+    document.getElementById('msgInput').focus();
+  }
+}
+
+function _markOrphaned(uWrap, aWrap) {
+  // Mark both bubbles as not in server history (session_idx = -1)
+  // so Edit won't try to truncate them
+  uWrap.dataset.sessionIdx = '-1';
+  aWrap.dataset.sessionIdx = '-1';
+}
+
+// ── Stop ──────────────────────────────────────────────────────────────────
+function stopGeneration() {
+  if (abortController) abortController.abort();
+}
+
+// ── Edit ──────────────────────────────────────────────────────────────────
+function startEdit(wrapEl) {
+  if (isStreaming) return;
+  const sessionIdx = parseInt(wrapEl.dataset.sessionIdx);
+  if (isNaN(sessionIdx) || sessionIdx < 0) return; // orphaned — not in server history
+
+  const bubble   = wrapEl.querySelector('.msg-user');
+  const textEl   = bubble.querySelector('.bubble-text');
+  const origText = textEl ? textEl.textContent : '';
+  wrapEl.dataset.origText = origText;
+
+  bubble.innerHTML = `
+    <textarea class="edit-textarea" rows="3">${escHtml(origText)}</textarea>
+    <div class="flex gap-2 mt-2 justify-end">
+      <button class="text-xs text-teal-200 hover:text-white px-2 py-1 rounded transition-colors"
+        onclick="cancelEdit(this)">Cancel</button>
+      <button class="text-xs bg-white text-teal-700 hover:bg-teal-50 font-semibold px-3 py-1 rounded transition-colors"
+        onclick="saveEdit(this)">Save &amp; Regenerate</button>
+    </div>
+  `;
+  const ta = bubble.querySelector('textarea');
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+}
+
+function cancelEdit(btn) {
+  const wrapEl = btn.closest('[data-session-idx]');
+  const bubble = wrapEl.querySelector('.msg-user');
+  const orig   = wrapEl.dataset.origText || '';
+  bubble.innerHTML = `<span class="bubble-text whitespace-pre-wrap">${escHtml(orig)}</span>`;
+  delete wrapEl.dataset.origText;
+}
+
+async function saveEdit(btn) {
+  if (isStreaming) return;
+  const wrapEl     = btn.closest('[data-session-idx]');
+  const bubble     = wrapEl.querySelector('.msg-user');
+  const ta         = bubble.querySelector('textarea');
+  const newText    = ta.value.trim();
+  if (!newText) return;
+
+  const sessionIdx = parseInt(wrapEl.dataset.sessionIdx);
+
+  // 1. Truncate server session to before this message
+  await fetch('/api/chat/truncate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, keep_up_to: sessionIdx }),
+  }).catch(() => {});
+
+  // 2. Remove this bubble + all subsequent bubbles from DOM
+  const msgs = document.getElementById('chatMessages');
+  [...msgs.querySelectorAll('[data-session-idx]')]
+    .filter(el => parseInt(el.dataset.sessionIdx) >= sessionIdx)
+    .forEach(el => el.remove());
+
+  // 3. Reset client count to match truncated server session
+  sessionMsgCount = sessionIdx;
+
+  // 4. Re-send edited text
+  await _sendText(newText);
+}
+
+// ── New Chat ──────────────────────────────────────────────────────────────
+async function newChat() {
+  if (isStreaming) return;
+  await fetch('/api/chat/session', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId }),
+  }).catch(() => {});
+
+  sessionId      = newUUID();
+  sessionMsgCount = 0;
+  localStorage.setItem('chatSessionId', sessionId);
+
+  document.getElementById('chatMessages').innerHTML = `
+    <div id="welcomeMsg" class="flex items-start gap-3 fade-in">
+      <div class="w-8 h-8 rounded-full bg-teal-100 border border-teal-200 flex items-center justify-center text-sm shrink-0 mt-0.5">🤖</div>
+      <div class="msg-assistant px-4 py-3 max-w-2xl text-sm leading-relaxed">
+        Hello! I'm your AI assistant. Describe your project, paste requirements, ask for effort estimates, user stories, risk analysis — whatever you need.
+      </div>
+    </div>
+  `;
+  document.getElementById('msgInput').focus();
+}
+
+// ── Download DOCX ─────────────────────────────────────────────────────────
+async function downloadDocx() {
+  try {
+    const resp = await fetch('/api/chat/download-docx', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ error: 'Download failed' }));
+      alert(err.error || 'Download failed');
+      return;
+    }
+    const blob = await resp.blob();
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = 'chat_conversation.docx'; a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert(`Download error: ${e.message}`);
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+function _setStreaming(on) {
+  isStreaming = on;
+  document.getElementById('sendBtn').classList.toggle('hidden', on);
+  document.getElementById('stopBtn').classList.toggle('hidden', !on);
+  document.getElementById('msgInput').disabled = on;
+}
+
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function scrollBottom() {
+  const el = document.getElementById('chatMessages');
+  el.scrollTop = el.scrollHeight;
+}
+
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 150) + 'px';
+}
+
+function handleKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+}
+</script>
+</body>
+</html>
