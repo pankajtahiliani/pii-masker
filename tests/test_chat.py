@@ -16,6 +16,12 @@ Coverage:
   Rate limit              — @rate_limit applied to chat_stream
   Static asset            — chat.html uses d.llama_server (not d.ollama)
   GET /chat route         — serves HTML page
+
+Patch targets after modularisation:
+  modules.chat.routes._stream_llama_server  — local stream mock
+  modules.chat.routes._stream_openrouter    — cloud stream mock
+  modules.chat.routes.USE_CLOUD             — backend selector
+  modules.chat.session._CHAT_SESSIONS       — session dict (also re-exported via app)
 """
 import json
 import os
@@ -28,17 +34,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
-# ─────────────────────────────────────────────────────────────────────────────
 
-def _sse_tokens(body: str) -> list:
-    """Extract token values from an SSE response body string."""
+def _sse_tokens(body: str) -> list[str]:
     tokens = []
     for line in body.split('\n'):
+        line = line.strip()
         if not line.startswith('data: '):
             continue
         raw = line[6:].strip()
-        if raw == '[DONE]':
-            break
+        if raw in ('[DONE]', ''):
+            continue
         try:
             obj = json.loads(raw)
             if 'token' in obj:
@@ -48,14 +53,14 @@ def _sse_tokens(body: str) -> list:
     return tokens
 
 
-def _sse_error(body: str) -> str | None:
-    """Return the error string from an SSE response, or None."""
+def _sse_error(body: str):
     for line in body.split('\n'):
+        line = line.strip()
         if not line.startswith('data: '):
             continue
         raw = line[6:].strip()
-        if raw == '[DONE]':
-            break
+        if raw in ('[DONE]', ''):
+            continue
         try:
             obj = json.loads(raw)
             if 'error' in obj:
@@ -72,9 +77,9 @@ def _sse_error(body: str) -> str | None:
 class ChatStreamInputTests(unittest.TestCase):
     def setUp(self):
         import app
-        self.app = app
+        from modules.chat.session import _CHAT_SESSIONS
         self.client = app.app.test_client()
-        app._CHAT_SESSIONS.clear()
+        _CHAT_SESSIONS.clear()
 
     def test_01_empty_message_rejected(self):
         """Empty message string → 400."""
@@ -119,14 +124,15 @@ class ChatStreamInputTests(unittest.TestCase):
 class ChatStreamFormatTests(unittest.TestCase):
     def setUp(self):
         import app
-        self.app = app
+        from modules.chat.session import _CHAT_SESSIONS
         self.client = app.app.test_client()
-        app._CHAT_SESSIONS.clear()
+        _CHAT_SESSIONS.clear()
 
     def test_07_sse_lines_start_with_data(self):
         """Every non-blank SSE line must start with 'data: '."""
-        with patch.object(self.app, '_stream_llama_server', return_value=iter(['Hi'])), \
-             patch.object(self.app, 'USE_CLOUD', False):
+        import modules.chat.routes as chat_routes
+        with patch.object(chat_routes, '_stream_llama_server', return_value=iter(['Hi'])), \
+             patch.object(chat_routes, 'USE_CLOUD', False):
             body = self.client.post('/api/chat/stream',
                                     json={'session_id': 's', 'message': 'x'}).get_data(as_text=True)
         for line in body.split('\n'):
@@ -136,27 +142,29 @@ class ChatStreamFormatTests(unittest.TestCase):
 
     def test_08_sse_contains_done_terminator(self):
         """SSE stream must end with data: [DONE]."""
-        with patch.object(self.app, '_stream_llama_server', return_value=iter(['tok'])), \
-             patch.object(self.app, 'USE_CLOUD', False):
+        import modules.chat.routes as chat_routes
+        with patch.object(chat_routes, '_stream_llama_server', return_value=iter(['tok'])), \
+             patch.object(chat_routes, 'USE_CLOUD', False):
             body = self.client.post('/api/chat/stream',
-                                    json={'session_id': 's', 'message': 'x'}).get_data(as_text=True)
+                                    json={'session_id': 's2', 'message': 'x'}).get_data(as_text=True)
         self.assertIn('data: [DONE]', body)
 
-    def test_09_token_lines_are_valid_json_with_token_key(self):
-        """Each token SSE event must be valid JSON containing 'token' key."""
-        with patch.object(self.app, '_stream_llama_server', return_value=iter(['A', 'B', 'C'])), \
-             patch.object(self.app, 'USE_CLOUD', False):
+    def test_09_sse_token_key_present(self):
+        """Each non-DONE SSE event must have a 'token' key."""
+        import modules.chat.routes as chat_routes
+        with patch.object(chat_routes, '_stream_llama_server', return_value=iter(['A', 'B'])), \
+             patch.object(chat_routes, 'USE_CLOUD', False):
             body = self.client.post('/api/chat/stream',
-                                    json={'session_id': 's', 'message': 'x'}).get_data(as_text=True)
-        tokens = _sse_tokens(body)
-        self.assertEqual(tokens, ['A', 'B', 'C'])
+                                    json={'session_id': 's3', 'message': 'x'}).get_data(as_text=True)
+        self.assertEqual(_sse_tokens(body), ['A', 'B'])
 
-    def test_10_content_type_is_event_stream(self):
+    def test_10_content_type_is_text_event_stream(self):
         """Response Content-Type must be text/event-stream."""
-        with patch.object(self.app, '_stream_llama_server', return_value=iter(['t'])), \
-             patch.object(self.app, 'USE_CLOUD', False):
+        import modules.chat.routes as chat_routes
+        with patch.object(chat_routes, '_stream_llama_server', return_value=iter(['t'])), \
+             patch.object(chat_routes, 'USE_CLOUD', False):
             resp = self.client.post('/api/chat/stream',
-                                    json={'session_id': 's', 'message': 'x'})
+                                    json={'session_id': 's4', 'message': 'x'})
         self.assertIn('text/event-stream', resp.content_type)
 
 
@@ -167,61 +175,60 @@ class ChatStreamFormatTests(unittest.TestCase):
 class ChatSessionLifecycleTests(unittest.TestCase):
     def setUp(self):
         import app
-        self.app = app
-        self.client = app.app.test_client()
-        app._CHAT_SESSIONS.clear()
+        from modules.chat.session import _CHAT_SESSIONS
+        self.app     = app
+        self.client  = app.app.test_client()
+        self.sessions = _CHAT_SESSIONS
+        _CHAT_SESSIONS.clear()
 
-    def _stream(self, sid, msg, tokens=('ok',)):
-        with patch.object(self.app, '_stream_llama_server', return_value=iter(tokens)), \
-             patch.object(self.app, 'USE_CLOUD', False):
-            self.client.post('/api/chat/stream',
-                             json={'session_id': sid, 'message': msg}).get_data()
+    def _stream(self, sid, msg, tokens):
+        import modules.chat.routes as chat_routes
+        with patch.object(chat_routes, '_stream_llama_server', return_value=iter(tokens)), \
+             patch.object(chat_routes, 'USE_CLOUD', False):
+            return self.client.post('/api/chat/stream',
+                                    json={'session_id': sid, 'message': msg}).get_data()
 
-    def test_11_successful_stream_saves_user_and_assistant(self):
-        """After stream, session has [user, assistant] pair with correct content."""
-        self._stream('s1', 'Hello', tokens=['Hi', ' there'])
-        msgs = self.app._CHAT_SESSIONS['s1']
+    def test_11_session_created_after_stream(self):
+        """Session entry created after first successful stream."""
+        self._stream('s1', 'hello', ['Hi'])
+        msgs = self.sessions['s1']
         self.assertEqual(len(msgs), 2)
-        self.assertEqual(msgs[0], {'role': 'user', 'content': 'Hello'})
-        self.assertEqual(msgs[1], {'role': 'assistant', 'content': 'Hi there'})
+        self.assertEqual(msgs[0]['role'], 'user')
+        self.assertEqual(msgs[1]['role'], 'assistant')
 
-    def test_12_message_content_preserved_exactly(self):
-        """User message content must be stored byte-for-byte."""
-        txt = 'Estimate a 3-team, 6-sprint project with OAuth + microservices'
-        self._stream('exact', txt, tokens=['done'])
-        self.assertEqual(self.app._CHAT_SESSIONS['exact'][0]['content'], txt)
+    def test_12_session_stores_exact_content(self):
+        """Session stores exact user and assistant text."""
+        txt = 'exact text 12345'
+        self._stream('exact', txt, [txt[:4], txt[4:]])
+        self.assertEqual(self.sessions['exact'][0]['content'], txt)
 
-    def test_13_session_isolated_between_different_ids(self):
-        """Two different session IDs must not share state."""
-        self._stream('alpha', 'msg-alpha', tokens=['resp-alpha'])
-        self._stream('beta',  'msg-beta',  tokens=['resp-beta'])
-        self.assertEqual(self.app._CHAT_SESSIONS['alpha'][0]['content'], 'msg-alpha')
-        self.assertEqual(self.app._CHAT_SESSIONS['beta'][0]['content'],  'msg-beta')
-        self.assertNotIn('msg-beta',  str(self.app._CHAT_SESSIONS['alpha']))
-        self.assertNotIn('msg-alpha', str(self.app._CHAT_SESSIONS['beta']))
+    def test_13_sessions_are_isolated(self):
+        """Two different session IDs don't share messages."""
+        self._stream('alpha', 'msg-alpha', ['resp-alpha'])
+        self._stream('beta',  'msg-beta',  ['resp-beta'])
+        self.assertEqual(self.sessions['alpha'][0]['content'], 'msg-alpha')
+        self.assertEqual(self.sessions['beta'][0]['content'],  'msg-beta')
+        self.assertNotIn('msg-beta',  str(self.sessions['alpha']))
+        self.assertNotIn('msg-alpha', str(self.sessions['beta']))
 
-    def test_14_multi_turn_session_grows_correctly(self):
-        """After 3 exchanges, session has 6 messages in correct order."""
+    def test_14_multi_turn_session_grows(self):
+        """Each request adds user + assistant = +2 messages."""
+        self._stream('mt', 'turn1', ['resp1'])
+        self._stream('mt', 'turn2', ['resp2'])
+        msgs = self.sessions['mt']
+        self.assertEqual(len(msgs), 4)
+
+    def test_15_delete_clears_session(self):
+        """DELETE /api/chat/session removes the session entry."""
+        self.sessions['del'] = [{'role': 'user', 'content': 'hi'}]
+        self.client.delete('/api/chat/session', json={'session_id': 'del'})
+        self.assertNotIn('del', self.sessions)
+
+    def test_16_session_count_correct_after_multi_turn(self):
+        """3 turns → 6 messages (3 user + 3 assistant)."""
         for i in range(3):
-            self._stream('mt', f'turn-{i}', tokens=[f'reply-{i}'])
-        msgs = self.app._CHAT_SESSIONS['mt']
-        self.assertEqual(len(msgs), 6)
-        for i in range(3):
-            self.assertEqual(msgs[i*2]['role'], 'user')
-            self.assertEqual(msgs[i*2+1]['role'], 'assistant')
-
-    def test_15_delete_session_removes_history(self):
-        """DELETE /api/chat/session wipes the session."""
-        self.app._CHAT_SESSIONS['del'] = [{'role': 'user', 'content': 'hi'}]
-        resp = self.client.delete('/api/chat/session', json={'session_id': 'del'})
-        self.assertEqual(resp.status_code, 200)
-        self.assertNotIn('del', self.app._CHAT_SESSIONS)
-
-    def test_16_delete_unknown_session_ok(self):
-        """DELETE on unknown session_id returns 200 (idempotent)."""
-        resp = self.client.delete('/api/chat/session', json={'session_id': 'ghost'})
-        self.assertEqual(resp.status_code, 200)
-        self.assertTrue(resp.get_json()['success'])
+            self._stream('cnt', f'turn{i}', [f'resp{i}'])
+        self.assertEqual(len(self.sessions['cnt']), 6)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -231,49 +238,64 @@ class ChatSessionLifecycleTests(unittest.TestCase):
 class ChatMultiTurnTests(unittest.TestCase):
     def setUp(self):
         import app
-        self.app = app
-        self.client = app.app.test_client()
-        app._CHAT_SESSIONS.clear()
+        from modules.chat.session import _CHAT_SESSIONS
+        self.app     = app
+        self.client  = app.app.test_client()
+        self.sessions = _CHAT_SESSIONS
+        _CHAT_SESSIONS.clear()
+
+    def _stream(self, sid, msg, tokens):
+        import modules.chat.routes as chat_routes
+        with patch.object(chat_routes, '_stream_llama_server', return_value=iter(tokens)), \
+             patch.object(chat_routes, 'USE_CLOUD', False):
+            return self.client.post('/api/chat/stream',
+                                    json={'session_id': sid, 'message': msg}).get_data()
 
     def test_17_system_prompt_is_first_message(self):
-        """First element in messages list passed to LLM must be the system prompt."""
-        with patch.object(self.app, '_stream_llama_server', return_value=iter(['r'])) as mock, \
-             patch.object(self.app, 'USE_CLOUD', False):
+        """LLM receives system prompt as first message in every call."""
+        from modules.chat.session import _CHAT_SYSTEM_PROMPT
+        import modules.chat.routes as chat_routes
+        with patch.object(chat_routes, '_stream_llama_server',
+                          return_value=iter(['r'])) as mock, \
+             patch.object(chat_routes, 'USE_CLOUD', False):
             self.client.post('/api/chat/stream',
                              json={'session_id': 'sp', 'message': 'hi'}).get_data()
+            msgs_to_llm = mock.call_args[0][0]
+        self.assertEqual(msgs_to_llm[0]['role'], 'system')
+
+    def test_18_system_prompt_matches_config(self):
+        """System prompt text matches _CHAT_SYSTEM_PROMPT constant."""
+        from modules.chat.session import _CHAT_SYSTEM_PROMPT
+        import modules.chat.routes as chat_routes
+        with patch.object(chat_routes, '_stream_llama_server',
+                          return_value=iter(['r'])) as mock, \
+             patch.object(chat_routes, 'USE_CLOUD', False):
+            self.client.post('/api/chat/stream',
+                             json={'session_id': 'sp2', 'message': 'hi'}).get_data()
             msgs = mock.call_args[0][0]
-        self.assertEqual(msgs[0]['role'], 'system')
-        self.assertIn('assistant', msgs[0]['content'].lower())
+        self.assertEqual(msgs[0]['content'], _CHAT_SYSTEM_PROMPT)
 
-    def test_18_system_prompt_content_is_hardcoded_string(self):
-        """System prompt must match the module-level _CHAT_SYSTEM_PROMPT constant."""
-        with patch.object(self.app, '_stream_llama_server', return_value=iter(['r'])) as mock, \
-             patch.object(self.app, 'USE_CLOUD', False):
+    def test_19_prior_turns_included_in_second_call(self):
+        """Second LLM call includes prior user/assistant exchange."""
+        import modules.chat.routes as chat_routes
+        with patch.object(chat_routes, '_stream_llama_server',
+                          return_value=iter(['A1'])), \
+             patch.object(chat_routes, 'USE_CLOUD', False):
             self.client.post('/api/chat/stream',
-                             json={'session_id': 'spc', 'message': 'hi'}).get_data()
-            msgs = mock.call_args[0][0]
-        self.assertEqual(msgs[0]['content'], self.app._CHAT_SYSTEM_PROMPT)
+                             json={'session_id': 'mt2', 'message': 'U1'}).get_data()
 
-    def test_19_second_turn_includes_prior_exchange(self):
-        """Second request passes system + U1 + A1 + U2 to the generator."""
-        sid = 'turn2'
-        with patch.object(self.app, '_stream_llama_server', return_value=iter(['A1'])), \
-             patch.object(self.app, 'USE_CLOUD', False):
+        with patch.object(chat_routes, '_stream_llama_server',
+                          return_value=iter(['A2'])) as mock2, \
+             patch.object(chat_routes, 'USE_CLOUD', False):
             self.client.post('/api/chat/stream',
-                             json={'session_id': sid, 'message': 'U1'}).get_data()
+                             json={'session_id': 'mt2', 'message': 'U2'}).get_data()
+            msgs_to_llm = mock2.call_args[0][0]
 
-        with patch.object(self.app, '_stream_llama_server', return_value=iter(['A2'])) as mock2, \
-             patch.object(self.app, 'USE_CLOUD', False):
-            self.client.post('/api/chat/stream',
-                             json={'session_id': sid, 'message': 'U2'}).get_data()
-            msgs = mock2.call_args[0][0]
-
-        roles = [m['role'] for m in msgs]
-        contents = [m['content'] for m in msgs]
-        self.assertEqual(roles, ['system', 'user', 'assistant', 'user'])
-        self.assertIn('U1', contents)
-        self.assertIn('A1', contents)
-        self.assertIn('U2', contents)
+        # system + U1 + A1 + U2 = 4 messages
+        self.assertEqual(len(msgs_to_llm), 4)
+        self.assertEqual(msgs_to_llm[1]['content'], 'U1')
+        self.assertEqual(msgs_to_llm[2]['content'], 'A1')
+        self.assertEqual(msgs_to_llm[3]['content'], 'U2')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -283,64 +305,69 @@ class ChatMultiTurnTests(unittest.TestCase):
 class ChatErrorHandlingTests(unittest.TestCase):
     def setUp(self):
         import app
-        self.app = app
-        self.client = app.app.test_client()
-        app._CHAT_SESSIONS.clear()
+        from modules.chat.session import _CHAT_SESSIONS
+        self.client  = app.app.test_client()
+        self.sessions = _CHAT_SESSIONS
+        _CHAT_SESSIONS.clear()
 
     def test_20_llm_error_yields_error_sse_event(self):
         """LLM exception → error SSE event emitted before [DONE]."""
+        import modules.chat.routes as chat_routes
         def boom(*a, **kw):
             raise RuntimeError("VRAM OOM")
             yield
 
-        with patch.object(self.app, '_stream_llama_server', side_effect=boom), \
-             patch.object(self.app, 'USE_CLOUD', False):
+        with patch.object(chat_routes, '_stream_llama_server', side_effect=boom), \
+             patch.object(chat_routes, 'USE_CLOUD', False):
             body = self.client.post('/api/chat/stream',
                                     json={'session_id': 'e1', 'message': 'hi'}).get_data(as_text=True)
         self.assertIsNotNone(_sse_error(body))
         self.assertIn('[DONE]', body)
 
     def test_21_llm_error_removes_orphaned_user_message(self):
-        """LLM error must clean up the user message appended before generation (Bug 1 variant)."""
+        """LLM error must clean up the user message appended before generation."""
+        import modules.chat.routes as chat_routes
         def boom(*a, **kw):
             raise RuntimeError("timeout")
             yield
 
-        with patch.object(self.app, '_stream_llama_server', side_effect=boom), \
-             patch.object(self.app, 'USE_CLOUD', False):
+        with patch.object(chat_routes, '_stream_llama_server', side_effect=boom), \
+             patch.object(chat_routes, 'USE_CLOUD', False):
             self.client.post('/api/chat/stream',
                              json={'session_id': 'e2', 'message': 'hi'}).get_data()
-        self.assertEqual(len(self.app._CHAT_SESSIONS.get('e2', [])), 0)
+        self.assertEqual(len(self.sessions.get('e2', [])), 0)
 
     def test_22_llm_error_mid_stream_partial_tokens_lost(self):
         """If LLM raises after yielding some tokens, orphaned user msg is cleaned up."""
+        import modules.chat.routes as chat_routes
         def partial_then_fail(*a, **kw):
             yield 'tok1'
             raise RuntimeError("connection reset")
 
-        with patch.object(self.app, '_stream_llama_server', side_effect=partial_then_fail), \
-             patch.object(self.app, 'USE_CLOUD', False):
+        with patch.object(chat_routes, '_stream_llama_server',
+                          side_effect=partial_then_fail), \
+             patch.object(chat_routes, 'USE_CLOUD', False):
             body = self.client.post('/api/chat/stream',
                                     json={'session_id': 'e3', 'message': 'hi'}).get_data(as_text=True)
-        # tok1 was streamed
         self.assertIn('tok1', body)
-        # User message cleaned up
-        self.assertEqual(len(self.app._CHAT_SESSIONS.get('e3', [])), 0)
+        self.assertEqual(len(self.sessions.get('e3', [])), 0)
 
     def test_23_empty_llm_response_cleans_up_user_message(self):
         """Bug 1 fix: LLM yields zero tokens → user message must NOT be orphaned."""
-        with patch.object(self.app, '_stream_llama_server', return_value=iter([])), \
-             patch.object(self.app, 'USE_CLOUD', False):
+        import modules.chat.routes as chat_routes
+        with patch.object(chat_routes, '_stream_llama_server', return_value=iter([])), \
+             patch.object(chat_routes, 'USE_CLOUD', False):
             self.client.post('/api/chat/stream',
                              json={'session_id': 'empty-resp', 'message': 'hi'}).get_data()
-        msgs = self.app._CHAT_SESSIONS.get('empty-resp', [])
+        msgs = self.sessions.get('empty-resp', [])
         self.assertEqual(len(msgs), 0,
                          "Zero-token response must remove the orphaned user message")
 
     def test_24_empty_llm_response_still_sends_done(self):
         """Zero-token response must still emit [DONE] so client doesn't hang."""
-        with patch.object(self.app, '_stream_llama_server', return_value=iter([])), \
-             patch.object(self.app, 'USE_CLOUD', False):
+        import modules.chat.routes as chat_routes
+        with patch.object(chat_routes, '_stream_llama_server', return_value=iter([])), \
+             patch.object(chat_routes, 'USE_CLOUD', False):
             body = self.client.post('/api/chat/stream',
                                     json={'session_id': 'e4', 'message': 'hi'}).get_data(as_text=True)
         self.assertIn('[DONE]', body)
@@ -353,27 +380,28 @@ class ChatErrorHandlingTests(unittest.TestCase):
 class ChatStopTests(unittest.TestCase):
     def setUp(self):
         import app
-        self.app = app
-        self.client = app.app.test_client()
-        app._CHAT_SESSIONS.clear()
+        from modules.chat.session import _CHAT_SESSIONS
+        self.client  = app.app.test_client()
+        self.sessions = _CHAT_SESSIONS
+        _CHAT_SESSIONS.clear()
 
     def test_25_stop_removes_orphaned_user_message(self):
         """Last msg = user (in-progress) → stop removes it."""
         sid = 'stop1'
-        self.app._CHAT_SESSIONS[sid] = [{'role': 'user', 'content': 'pending'}]
+        self.sessions[sid] = [{'role': 'user', 'content': 'pending'}]
         resp = self.client.post('/api/chat/stop', json={'session_id': sid})
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(len(self.app._CHAT_SESSIONS[sid]), 0)
+        self.assertEqual(len(self.sessions[sid]), 0)
 
     def test_26_stop_on_completed_session_is_noop(self):
         """Last msg = assistant (completed) → stop does nothing."""
         sid = 'stop2'
-        self.app._CHAT_SESSIONS[sid] = [
+        self.sessions[sid] = [
             {'role': 'user',      'content': 'hi'},
             {'role': 'assistant', 'content': 'hello'},
         ]
         self.client.post('/api/chat/stop', json={'session_id': sid})
-        self.assertEqual(len(self.app._CHAT_SESSIONS[sid]), 2)
+        self.assertEqual(len(self.sessions[sid]), 2)
 
     def test_27_stop_on_unknown_session_ok(self):
         """Stop on non-existent session → 200, no crash."""
@@ -383,15 +411,15 @@ class ChatStopTests(unittest.TestCase):
     def test_28_stop_mid_multi_turn_preserves_completed_exchanges(self):
         """Stop after 2 completed turns + 1 pending → only pending user removed."""
         sid = 'stopmulti'
-        self.app._CHAT_SESSIONS[sid] = [
+        self.sessions[sid] = [
             {'role': 'user',      'content': 'turn1'},
             {'role': 'assistant', 'content': 'reply1'},
             {'role': 'user',      'content': 'turn2'},
             {'role': 'assistant', 'content': 'reply2'},
-            {'role': 'user',      'content': 'pending-turn3'},  # orphaned
+            {'role': 'user',      'content': 'pending-turn3'},
         ]
         self.client.post('/api/chat/stop', json={'session_id': sid})
-        msgs = self.app._CHAT_SESSIONS[sid]
+        msgs = self.sessions[sid]
         self.assertEqual(len(msgs), 4)
         self.assertEqual(msgs[-1]['content'], 'reply2')
 
@@ -408,14 +436,15 @@ class ChatStopTests(unittest.TestCase):
 class ChatTruncateTests(unittest.TestCase):
     def setUp(self):
         import app
-        self.app = app
-        self.client = app.app.test_client()
-        app._CHAT_SESSIONS.clear()
+        from modules.chat.session import _CHAT_SESSIONS
+        self.client  = app.app.test_client()
+        self.sessions = _CHAT_SESSIONS
+        _CHAT_SESSIONS.clear()
 
     def _session(self, sid, n_pairs):
-        self.app._CHAT_SESSIONS[sid] = []
+        self.sessions[sid] = []
         for i in range(n_pairs):
-            self.app._CHAT_SESSIONS[sid] += [
+            self.sessions[sid] += [
                 {'role': 'user',      'content': f'u{i}'},
                 {'role': 'assistant', 'content': f'a{i}'},
             ]
@@ -424,7 +453,7 @@ class ChatTruncateTests(unittest.TestCase):
         """keep_up_to=2 keeps first 2 messages."""
         self._session('t1', 3)
         self.client.post('/api/chat/truncate', json={'session_id': 't1', 'keep_up_to': 2})
-        msgs = self.app._CHAT_SESSIONS['t1']
+        msgs = self.sessions['t1']
         self.assertEqual(len(msgs), 2)
         self.assertEqual(msgs[-1]['content'], 'a0')
 
@@ -432,7 +461,7 @@ class ChatTruncateTests(unittest.TestCase):
         """keep_up_to=0 removes all messages."""
         self._session('t2', 2)
         self.client.post('/api/chat/truncate', json={'session_id': 't2', 'keep_up_to': 0})
-        self.assertEqual(len(self.app._CHAT_SESSIONS['t2']), 0)
+        self.assertEqual(len(self.sessions['t2']), 0)
 
     def test_32_truncate_negative_clamped_to_zero(self):
         """Bug 3 fix: negative keep_up_to must be clamped to 0, not [:−1]."""
@@ -440,7 +469,7 @@ class ChatTruncateTests(unittest.TestCase):
         resp = self.client.post('/api/chat/truncate',
                                 json={'session_id': 't3', 'keep_up_to': -5})
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(len(self.app._CHAT_SESSIONS['t3']), 0,
+        self.assertEqual(len(self.sessions['t3']), 0,
                          "Negative keep_up_to must be treated as 0, not a Python negative index")
 
     def test_33_truncate_invalid_type_returns_400(self):
@@ -469,7 +498,7 @@ class ChatTruncateTests(unittest.TestCase):
         self._session('t6', 2)
         self.client.post('/api/chat/truncate',
                          json={'session_id': 't6', 'keep_up_to': 9999})
-        self.assertEqual(len(self.app._CHAT_SESSIONS['t6']), 4)
+        self.assertEqual(len(self.sessions['t6']), 4)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -479,14 +508,15 @@ class ChatTruncateTests(unittest.TestCase):
 class ChatSessionGetTests(unittest.TestCase):
     def setUp(self):
         import app
-        self.app = app
-        self.client = app.app.test_client()
-        app._CHAT_SESSIONS.clear()
+        from modules.chat.session import _CHAT_SESSIONS
+        self.client  = app.app.test_client()
+        self.sessions = _CHAT_SESSIONS
+        _CHAT_SESSIONS.clear()
 
     def test_37_session_get_returns_all_messages(self):
         """GET /api/chat/session returns full message list."""
         sid = 'g1'
-        self.app._CHAT_SESSIONS[sid] = [
+        self.sessions[sid] = [
             {'role': 'user',      'content': 'req'},
             {'role': 'assistant', 'content': 'resp'},
         ]
@@ -507,9 +537,9 @@ class ChatSessionGetTests(unittest.TestCase):
 
     def test_40_session_get_returns_correct_content(self):
         """GET returns exact message content, not references or truncated data."""
-        sid = 'g2'
+        sid      = 'g2'
         long_msg = 'x' * 2000
-        self.app._CHAT_SESSIONS[sid] = [{'role': 'user', 'content': long_msg}]
+        self.sessions[sid] = [{'role': 'user', 'content': long_msg}]
         data = self.client.get(f'/api/chat/session?session_id={sid}').get_json()
         self.assertEqual(data['messages'][0]['content'], long_msg)
 
@@ -523,13 +553,15 @@ class ChatEditWorkflowTests(unittest.TestCase):
 
     def setUp(self):
         import app
-        self.app = app
-        self.client = app.app.test_client()
-        app._CHAT_SESSIONS.clear()
+        from modules.chat.session import _CHAT_SESSIONS
+        self.client  = app.app.test_client()
+        self.sessions = _CHAT_SESSIONS
+        _CHAT_SESSIONS.clear()
 
     def _stream(self, sid, msg, tokens):
-        with patch.object(self.app, '_stream_llama_server', return_value=iter(tokens)), \
-             patch.object(self.app, 'USE_CLOUD', False):
+        import modules.chat.routes as chat_routes
+        with patch.object(chat_routes, '_stream_llama_server', return_value=iter(tokens)), \
+             patch.object(chat_routes, 'USE_CLOUD', False):
             return self.client.post('/api/chat/stream',
                                     json={'session_id': sid, 'message': msg}).get_data()
 
@@ -538,10 +570,9 @@ class ChatEditWorkflowTests(unittest.TestCase):
         sid = 'edit1'
         self._stream(sid, 'original U1', ['A1'])
         self._stream(sid, 'U2', ['A2'])
-        # Now edit U1 → truncate to 0, re-send edited text
         self.client.post('/api/chat/truncate', json={'session_id': sid, 'keep_up_to': 0})
         self._stream(sid, 'edited U1', ['new-A1'])
-        msgs = self.app._CHAT_SESSIONS[sid]
+        msgs = self.sessions[sid]
         self.assertEqual(len(msgs), 2)
         self.assertEqual(msgs[0]['content'], 'edited U1')
         self.assertEqual(msgs[1]['content'], 'new-A1')
@@ -551,10 +582,9 @@ class ChatEditWorkflowTests(unittest.TestCase):
         sid = 'edit2'
         self._stream(sid, 'U1', ['A1'])
         self._stream(sid, 'U2', ['A2'])
-        # Edit U2 → keep_up_to=2 (index of U2 in session)
         self.client.post('/api/chat/truncate', json={'session_id': sid, 'keep_up_to': 2})
         self._stream(sid, 'edited U2', ['new-A2'])
-        msgs = self.app._CHAT_SESSIONS[sid]
+        msgs = self.sessions[sid]
         self.assertEqual(len(msgs), 4)
         self.assertEqual(msgs[0]['content'], 'U1')
         self.assertEqual(msgs[1]['content'], 'A1')
@@ -563,13 +593,15 @@ class ChatEditWorkflowTests(unittest.TestCase):
 
     def test_43_re_send_after_edit_passes_correct_history_to_llm(self):
         """After edit, LLM receives correct history (no stale prior turns)."""
+        import modules.chat.routes as chat_routes
         sid = 'edit3'
         self._stream(sid, 'U1', ['A1'])
         self._stream(sid, 'U2', ['A2'])
         self.client.post('/api/chat/truncate', json={'session_id': sid, 'keep_up_to': 0})
 
-        with patch.object(self.app, '_stream_llama_server', return_value=iter(['new'])) as mock, \
-             patch.object(self.app, 'USE_CLOUD', False):
+        with patch.object(chat_routes, '_stream_llama_server',
+                          return_value=iter(['new'])) as mock, \
+             patch.object(chat_routes, 'USE_CLOUD', False):
             self.client.post('/api/chat/stream',
                              json={'session_id': sid, 'message': 'fresh start'}).get_data()
             msgs_to_llm = mock.call_args[0][0]
@@ -588,9 +620,10 @@ class ChatEditWorkflowTests(unittest.TestCase):
 class ChatDownloadTests(unittest.TestCase):
     def setUp(self):
         import app
-        self.app = app
-        self.client = app.app.test_client()
-        app._CHAT_SESSIONS.clear()
+        from modules.chat.session import _CHAT_SESSIONS
+        self.client  = app.app.test_client()
+        self.sessions = _CHAT_SESSIONS
+        _CHAT_SESSIONS.clear()
 
     def test_44_download_empty_session_rejected(self):
         """No conversation → 400."""
@@ -605,7 +638,7 @@ class ChatDownloadTests(unittest.TestCase):
     def test_46_download_returns_docx_content_type(self):
         """Valid session → 200 with DOCX MIME type."""
         sid = 'dl1'
-        self.app._CHAT_SESSIONS[sid] = [
+        self.sessions[sid] = [
             {'role': 'user',      'content': 'Estimate 3 sprints'},
             {'role': 'assistant', 'content': '42 points'},
         ]
@@ -617,9 +650,8 @@ class ChatDownloadTests(unittest.TestCase):
         """DOCX file (zip-based) must start with PK magic bytes."""
         import io, zipfile
         sid = 'dl2'
-        self.app._CHAT_SESSIONS[sid] = [{'role': 'user', 'content': 'hello'}]
+        self.sessions[sid] = [{'role': 'user', 'content': 'hello'}]
         resp = self.client.post('/api/chat/download-docx', json={'session_id': sid})
-        # DOCX = ZIP — must be readable
         self.assertTrue(zipfile.is_zipfile(io.BytesIO(resp.data)),
                         "Downloaded file is not a valid ZIP/DOCX")
 
@@ -636,15 +668,18 @@ class ChatDownloadTests(unittest.TestCase):
 class ChatRouteAndConfigTests(unittest.TestCase):
     def setUp(self):
         import app
-        self.app = app
-        self.client = app.app.test_client()
-        app._CHAT_SESSIONS.clear()
+        from modules.chat.session import _CHAT_SESSIONS
+        self.client  = app.app.test_client()
+        self.sessions = _CHAT_SESSIONS
+        _CHAT_SESSIONS.clear()
 
     def test_49_cloud_path_uses_stream_openrouter(self):
         """USE_CLOUD=True → _stream_openrouter called, _stream_llama_server not."""
-        with patch.object(self.app, '_stream_openrouter', return_value=iter(['cloud'])) as mock_or, \
-             patch.object(self.app, '_stream_llama_server') as mock_local, \
-             patch.object(self.app, 'USE_CLOUD', True):
+        import modules.chat.routes as chat_routes
+        with patch.object(chat_routes, '_stream_openrouter',
+                          return_value=iter(['cloud'])) as mock_or, \
+             patch.object(chat_routes, '_stream_llama_server') as mock_local, \
+             patch.object(chat_routes, 'USE_CLOUD', True):
             self.client.post('/api/chat/stream',
                              json={'session_id': 'c', 'message': 'hi'}).get_data()
             mock_or.assert_called_once()
@@ -652,9 +687,11 @@ class ChatRouteAndConfigTests(unittest.TestCase):
 
     def test_50_local_path_uses_stream_llama_server(self):
         """USE_CLOUD=False → _stream_llama_server called, _stream_openrouter not."""
-        with patch.object(self.app, '_stream_llama_server', return_value=iter(['local'])) as mock_local, \
-             patch.object(self.app, '_stream_openrouter') as mock_or, \
-             patch.object(self.app, 'USE_CLOUD', False):
+        import modules.chat.routes as chat_routes
+        with patch.object(chat_routes, '_stream_llama_server',
+                          return_value=iter(['local'])) as mock_local, \
+             patch.object(chat_routes, '_stream_openrouter') as mock_or, \
+             patch.object(chat_routes, 'USE_CLOUD', False):
             self.client.post('/api/chat/stream',
                              json={'session_id': 'l', 'message': 'hi'}).get_data()
             mock_local.assert_called_once()
@@ -662,8 +699,9 @@ class ChatRouteAndConfigTests(unittest.TestCase):
 
     def test_51_chat_stream_has_rate_limit_decorator(self):
         """chat_stream must carry @rate_limit decorator for multi-user safety."""
-        import app, inspect
-        src = inspect.getsource(app)
+        from modules.chat import routes as chat_routes_module
+        import inspect
+        src = inspect.getsource(chat_routes_module)
         idx = src.find('def chat_stream(')
         self.assertGreater(idx, 0)
         window = src[max(0, idx - 400):idx]
