@@ -3,7 +3,11 @@ Shared configuration, infrastructure, and rate-limiting helpers.
 
 All modules import from here — never from app.py — to avoid circular deps.
 """
+import base64
+import hashlib
+import hmac as _hmac
 import os
+import secrets
 import threading
 import requests
 from requests.adapters import HTTPAdapter
@@ -85,3 +89,36 @@ def rate_limit(spec):
     if _HAS_LIMITER:
         return limiter.limit(spec)
     return lambda f: f
+
+
+# ── Download token signing ────────────────────────────────────────────────────
+# Signs masked-file names so only the uploading request can download.
+# Regenerated each startup — tokens from prior runs are intentionally invalid
+# (files are deleted after download anyway).
+_DOWNLOAD_SECRET = os.environ.get("DOWNLOAD_SECRET", secrets.token_hex(32))
+
+
+def make_download_token(filename: str) -> str:
+    """Return URL-safe base64(filename:hmac) — opaque to the client."""
+    sig = _hmac.new(_DOWNLOAD_SECRET.encode(), filename.encode(), hashlib.sha256).hexdigest()
+    raw = f"{filename}:{sig}"
+    return base64.urlsafe_b64encode(raw.encode()).rstrip(b"=").decode()
+
+
+def verify_download_token(token: str) -> str | None:
+    """Decode and verify token. Return filename if valid, None if tampered/invalid."""
+    try:
+        padded = token + "=" * (-len(token) % 4)
+        raw    = base64.urlsafe_b64decode(padded.encode()).decode()
+        idx    = raw.rfind(":")
+        if idx == -1:
+            return None
+        filename, sig = raw[:idx], raw[idx + 1:]
+        expected = _hmac.new(
+            _DOWNLOAD_SECRET.encode(), filename.encode(), hashlib.sha256
+        ).hexdigest()
+        if _hmac.compare_digest(sig, expected):
+            return filename
+    except Exception:
+        pass
+    return None

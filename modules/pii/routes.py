@@ -1,19 +1,24 @@
 """
 PII Masker routes — Blueprint: sanitize UI, mask file, text masking, file download.
 """
+import io
+import logging
 import os
 import uuid
-import tempfile
 
 from flask import Blueprint, request, jsonify, send_file, send_from_directory
 
-from config import UPLOAD_FOLDER, MAX_FILE_SIZE, rate_limit
+from config import (
+    UPLOAD_FOLDER, MAX_FILE_SIZE, rate_limit,
+    make_download_token, verify_download_token,
+)
 from llm.client import get_model
 from modules.pii.masker import (
     build_replacement_map, apply_replacements,
     process_txt, process_docx, process_xlsx,
 )
 
+logger = logging.getLogger(__name__)
 pii_bp = Blueprint('pii', __name__)
 
 
@@ -23,6 +28,7 @@ def sanitize():
 
 
 @pii_bp.route('/api/mask', methods=['POST'])
+@rate_limit("10 per minute; 100 per hour")
 def mask_file():
     if 'file' not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
@@ -42,14 +48,14 @@ def mask_file():
         return jsonify({"error": f"Unsupported format: {ext}. Supported: txt, docx, xlsx, csv"}), 400
 
     # UUID prefix prevents filename collision when concurrent users upload same filename
-    safe_ext = os.path.splitext(file.filename)[1].lower()
-    tmp_name = f"{uuid.uuid4().hex}{safe_ext}"
+    tmp_name = f"{uuid.uuid4().hex}{ext}"
     tmp_path = os.path.join(UPLOAD_FOLDER, tmp_name)
     file.save(tmp_path)
 
     model = get_model()
-    print(f"[Mask] File={file.filename} | AI model={'None (regex only)' if not model else model}")
+    logger.info("[mask] file=%s model=%s", file.filename, model or "regex-only")
 
+    out_path = None
     try:
         if ext in ['.txt', '.csv']:
             out_path, detections, preview = process_txt(tmp_path, model)
@@ -65,33 +71,45 @@ def mask_file():
                 seen_orig.add(d["original"])
                 unique_detections.append(d)
 
+        out_basename = os.path.basename(out_path)
         return jsonify({
             "success":           True,
             "original_filename": file.filename,
-            "masked_filename":   os.path.basename(out_path),
+            "masked_filename":   out_basename,
             "detections":        unique_detections,
             "detection_count":   len(unique_detections),
             "preview":           preview[:500],
-            "download_token":    os.path.basename(out_path),
+            "download_token":    make_download_token(out_basename),
             "ai_used":           model is not None,
             "model":             model or "regex-only",
         })
     except Exception as e:
-        print(f"[Error] {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.error("[mask] %s", e, exc_info=True)
+        return jsonify({"error": "Internal server error"}), 500
+    finally:
+        # Always clean up the uploaded input file regardless of success/failure
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
-@pii_bp.route('/api/download/<filename>')
-def download_file(filename):
-    safe_name = os.path.basename(filename)
+@pii_bp.route('/api/download/<path:token>')
+def download_file(token):
+    safe_name = verify_download_token(token)
+    if not safe_name:
+        return jsonify({"error": "Invalid or expired download token"}), 403
+
     file_path = os.path.join(UPLOAD_FOLDER, safe_name)
     if not os.path.exists(file_path):
-        return jsonify({"error": "File not found"}), 404
+        return jsonify({"error": "File not found or already downloaded"}), 404
+
     response = send_file(file_path, as_attachment=True, download_name=safe_name)
     # Clean up after serving — prevent disk accumulation on long-running pod
+    # On Unix, unlink while fd is open is safe: data remains until fd closes.
     try:
         os.unlink(file_path)
-    except Exception:
+    except OSError:
         pass
     return response
 
@@ -102,14 +120,13 @@ def extract_text_api():
     """Server-side text extraction for binary formats (docx, pdf, xlsx)."""
     if 'file' not in request.files:
         return jsonify({"error": "No file provided"}), 400
-    f = request.files['file']
+    f    = request.files['file']
     name = (f.filename or '').lower()
 
     try:
         if name.endswith('.docx'):
             from docx import Document as DocxDocument
-            import io
-            doc = DocxDocument(io.BytesIO(f.read()))
+            doc   = DocxDocument(io.BytesIO(f.read()))
             parts = []
             for para in doc.paragraphs:
                 if para.text.strip():
@@ -127,24 +144,24 @@ def extract_text_api():
         elif name.endswith('.pdf'):
             data = f.read()
             try:
-                import pdfplumber, io
+                import pdfplumber
                 with pdfplumber.open(io.BytesIO(data)) as pdf:
                     text = '\n'.join(page.extract_text() or '' for page in pdf.pages)
                 return jsonify({"text": text})
             except ImportError:
                 pass
             try:
-                import pypdf, io
+                import pypdf
                 reader = pypdf.PdfReader(io.BytesIO(data))
-                text = '\n'.join(page.extract_text() or '' for page in reader.pages)
+                text   = '\n'.join(page.extract_text() or '' for page in reader.pages)
                 return jsonify({"text": text})
             except ImportError:
                 return jsonify({"error": "PDF extraction unavailable. Install: pip install pdfplumber"}), 500
 
         elif name.endswith(('.xlsx', '.xls')):
             try:
-                import openpyxl, io
-                wb = openpyxl.load_workbook(io.BytesIO(f.read()), data_only=True)
+                import openpyxl
+                wb    = openpyxl.load_workbook(io.BytesIO(f.read()), data_only=True)
                 parts = []
                 for sheet in wb.worksheets:
                     parts.append(f'[Sheet: {sheet.title}]')
@@ -161,21 +178,26 @@ def extract_text_api():
             return jsonify({"text": text})
 
     except Exception as e:
-        print(f"[extract-text] error: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.error("[extract-text] %s", e, exc_info=True)
+        return jsonify({"error": "Internal server error"}), 500
 
 
 @pii_bp.route('/api/mask-text', methods=['POST'])
+@rate_limit("30 per minute; 300 per hour")
 def mask_text_api():
     data = request.json
     if not data or 'text' not in data:
         return jsonify({"error": "No text provided"}), 400
-    text = data['text'][:10000]
-    model = get_model()
-    replacement_map, detections = build_replacement_map(text, model)
-    masked = apply_replacements(text, replacement_map)
-    return jsonify({
-        "masked_text":     masked,
-        "detections":      detections,
-        "detection_count": len(replacement_map),
-    })
+    try:
+        text = data['text'][:10000]
+        model = get_model()
+        replacement_map, detections = build_replacement_map(text, model)
+        masked = apply_replacements(text, replacement_map)
+        return jsonify({
+            "masked_text":     masked,
+            "detections":      detections,
+            "detection_count": len(replacement_map),
+        })
+    except Exception as e:
+        logger.error("[mask-text] %s", e, exc_info=True)
+        return jsonify({"error": "Internal server error"}), 500

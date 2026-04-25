@@ -1,8 +1,9 @@
 """
 Call Summarizer routes — Blueprint: UI page, transcript analysis, DOCX download.
 """
+import io
+import logging
 import re
-import tempfile
 
 import requests
 from flask import Blueprint, request, jsonify, send_file, send_from_directory
@@ -11,7 +12,8 @@ from config import USE_CLOUD, OPENROUTER_MODEL, rate_limit
 from llm.client import get_model, _call_llm, _model_timeout
 from modules.project_docs.parser import _parse_json_response
 
-call_summarizer_bp = Blueprint('call_summarizer', __name__)
+logger               = logging.getLogger(__name__)
+call_summarizer_bp   = Blueprint('call_summarizer', __name__)
 
 
 @call_summarizer_bp.route('/call-summarizer')
@@ -56,7 +58,8 @@ Transcript: {src}""".format(src=src_short)
     except requests.exceptions.Timeout:
         return jsonify({"error": "Timed out. Try a shorter transcript or faster model."}), 504
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.error("[summarize-call] %s", e, exc_info=True)
+        return jsonify({"error": "Internal server error"}), 500
 
 
 @call_summarizer_bp.route('/api/download-call-docx', methods=['POST'])
@@ -69,42 +72,47 @@ def download_call_docx():
     safe_name = re.sub(r'[^\w\s-]', '', transcript_name) if transcript_name else ''
     filename  = f"Call Summary - {safe_name}.docx" if safe_name else "Call Summary.docx"
 
-    doc = Document()
-    doc.add_heading(f"Call Summary{' — ' + transcript_name if transcript_name else ''}", 0)
+    try:
+        doc = Document()
+        doc.add_heading(f"Call Summary{' — ' + transcript_name if transcript_name else ''}", 0)
 
-    sections = [
-        ('key_takeaways',  '💡 Key Takeaways',    'list_numbered'),
-        ('action_items',   '✅ Action Items',      'action'),
-        ('decisions',      '🎯 Decisions Made',    'list_bullet'),
-        ('risks',          '⚠️  Risks & Blockers', 'list_bullet'),
-        ('next_steps',     '➡️  Next Steps',       'list_numbered'),
-    ]
+        sections = [
+            ('key_takeaways',  '💡 Key Takeaways',    'list_numbered'),
+            ('action_items',   '✅ Action Items',      'action'),
+            ('decisions',      '🎯 Decisions Made',    'list_bullet'),
+            ('risks',          '⚠️  Risks & Blockers', 'list_bullet'),
+            ('next_steps',     '➡️  Next Steps',       'list_numbered'),
+        ]
 
-    for field, heading, style in sections:
-        doc.add_heading(heading, level=1)
-        items = d.get(field, [])
-        if not items:
-            doc.add_paragraph('None recorded.').italic = True
-            continue
-        for i, item in enumerate(items):
-            if field == 'action_items':
-                task     = item.get('task', str(item))     if isinstance(item, dict) else str(item)
-                owner    = item.get('owner', 'TBD')        if isinstance(item, dict) else 'TBD'
-                deadline = item.get('deadline', 'TBD')     if isinstance(item, dict) else 'TBD'
-                p = doc.add_paragraph()
-                p.add_run(f"{i + 1}. {task}").bold = True
-                p.add_run(f"\n   Owner: {owner}  |  Deadline: {deadline}")
-            elif style == 'list_numbered':
-                doc.add_paragraph(f"{i + 1}. {item}")
-            else:
-                doc.add_paragraph(f"• {item}")
+        for field, heading, style in sections:
+            doc.add_heading(heading, level=1)
+            items = d.get(field, [])
+            if not items:
+                doc.add_paragraph('None recorded.').italic = True
+                continue
+            for i, item in enumerate(items):
+                if field == 'action_items':
+                    task     = item.get('task', str(item))     if isinstance(item, dict) else str(item)
+                    owner    = item.get('owner', 'TBD')        if isinstance(item, dict) else 'TBD'
+                    deadline = item.get('deadline', 'TBD')     if isinstance(item, dict) else 'TBD'
+                    p = doc.add_paragraph()
+                    p.add_run(f"{i + 1}. {task}").bold = True
+                    p.add_run(f"\n   Owner: {owner}  |  Deadline: {deadline}")
+                elif style == 'list_numbered':
+                    doc.add_paragraph(f"{i + 1}. {item}")
+                else:
+                    doc.add_paragraph(f"• {item}")
 
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.docx')
-    doc.save(tmp.name)
-    tmp.close()
-    return send_file(
-        tmp.name,
-        as_attachment=True,
-        download_name=filename,
-        mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    )
+        # Write to BytesIO — no temp file, nothing to clean up
+        buf = io.BytesIO()
+        doc.save(buf)
+        buf.seek(0)
+        return send_file(
+            buf,
+            as_attachment=True,
+            download_name=filename,
+            mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        )
+    except Exception as e:
+        logger.error("[download-call-docx] %s", e, exc_info=True)
+        return jsonify({"error": "Internal server error"}), 500
