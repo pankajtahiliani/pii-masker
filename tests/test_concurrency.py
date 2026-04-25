@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 class SemaphoreTests(unittest.TestCase):
     def test_01_semaphore_caps_concurrent_calls(self):
         """_LLM_SEM limits simultaneous _call_llm to configured bound."""
-        import app
+        import llm.client as llm_client
 
         in_flight = []
         max_seen  = [0]
@@ -36,10 +36,10 @@ class SemaphoreTests(unittest.TestCase):
             return '{"ok":1}'
 
         # Shrink semaphore to 3 for deterministic test
-        with patch.object(app, '_LLM_SEM', threading.BoundedSemaphore(3)), \
-             patch.object(app, 'USE_CLOUD', False), \
-             patch.object(app, '_call_llama_server', side_effect=slow_llama):
-            threads = [threading.Thread(target=app._call_llm,
+        with patch.object(llm_client, '_LLM_SEM', threading.BoundedSemaphore(3)), \
+             patch.object(llm_client, 'USE_CLOUD', False), \
+             patch.object(llm_client, '_call_llama_server', side_effect=slow_llama):
+            threads = [threading.Thread(target=llm_client._call_llm,
                                          args=("m", "p"),
                                          kwargs={"options_override": {"max_tokens": 100}})
                        for _ in range(10)]
@@ -51,15 +51,16 @@ class SemaphoreTests(unittest.TestCase):
 
     def test_02_semaphore_releases_on_exception(self):
         """Exception in _call_llama_server must not leak semaphore permits."""
-        import app
+        import llm.client as llm_client
 
         sem = threading.BoundedSemaphore(2)
-        with patch.object(app, '_LLM_SEM', sem), \
-             patch.object(app, 'USE_CLOUD', False), \
-             patch.object(app, '_call_llama_server', side_effect=RuntimeError("boom")):
+        with patch.object(llm_client, '_LLM_SEM', sem), \
+             patch.object(llm_client, 'USE_CLOUD', False), \
+             patch.object(llm_client, '_call_llama_server',
+                          side_effect=RuntimeError("boom")):
             for _ in range(5):
                 with self.assertRaises(RuntimeError):
-                    app._call_llm("m", "p")
+                    llm_client._call_llm("m", "p")
 
         # All 2 permits must be free
         for _ in range(2):
@@ -67,33 +68,32 @@ class SemaphoreTests(unittest.TestCase):
 
     def test_03_semaphore_bound_from_env(self):
         """LLM_MAX_CONCURRENT env var sized from import-time os.environ."""
-        import app
-        # Default or env-set; must be ≥1 BoundedSemaphore-ish
-        self.assertTrue(hasattr(app, '_LLM_SEM'))
-        self.assertGreaterEqual(app._LLM_MAX_CONCURRENT, 1)
+        import config
+        self.assertTrue(hasattr(config, '_LLM_SEM'))
+        self.assertGreaterEqual(config._LLM_MAX_CONCURRENT, 1)
 
 
 class RateLimitHelperTests(unittest.TestCase):
     def test_04_rate_limit_noop_when_absent(self):
         """rate_limit returns identity decorator when _HAS_LIMITER=False."""
-        import app
-        with patch.object(app, '_HAS_LIMITER', False):
-            deco = app.rate_limit("5 per minute")
+        import config
+        with patch.object(config, '_HAS_LIMITER', False):
+            deco = config.rate_limit("5 per minute")
             def sample(): return "hi"
             wrapped = deco(sample)
             self.assertIs(wrapped, sample, "Should pass through when limiter absent")
 
     def test_05_rate_limit_calls_limiter_when_present(self):
         """rate_limit proxies to limiter.limit when _HAS_LIMITER=True."""
-        import app
+        import config
         called_with = []
         class FakeLimiter:
             def limit(self, spec):
                 called_with.append(spec)
                 return lambda f: f
-        with patch.object(app, '_HAS_LIMITER', True), \
-             patch.object(app, 'limiter', FakeLimiter()):
-            app.rate_limit("10 per minute")
+        with patch.object(config, '_HAS_LIMITER', True), \
+             patch.object(config, 'limiter', FakeLimiter()):
+            config.rate_limit("10 per minute")
             self.assertEqual(called_with, ["10 per minute"])
 
 
@@ -115,16 +115,25 @@ class FlaskConfigTests(unittest.TestCase):
 
     def test_08_heavy_endpoints_rate_limited(self):
         """Heavy endpoints carry @rate_limit decorator."""
-        import app
+        from modules.project_docs import routes as proj_routes
+        from modules.pii import routes as pii_routes
         import inspect
-        src = inspect.getsource(app)
-        for endpoint in ["generate_artifact", "generate_docs", "extract_text_api"]:
-            # rate_limit should appear near endpoint def
-            idx = src.find(f"def {endpoint}(")
-            self.assertGreater(idx, 0, f"{endpoint} not found")
-            window = src[max(0, idx-400):idx]
+
+        src_proj = inspect.getsource(proj_routes)
+        src_pii  = inspect.getsource(pii_routes)
+
+        for endpoint in ["generate_artifact", "generate_docs"]:
+            idx = src_proj.find(f"def {endpoint}(")
+            self.assertGreater(idx, 0, f"{endpoint} not found in project_docs routes")
+            window = src_proj[max(0, idx - 400):idx]
             self.assertIn("rate_limit", window,
                           f"{endpoint} missing @rate_limit decorator")
+
+        idx = src_pii.find("def extract_text_api(")
+        self.assertGreater(idx, 0, "extract_text_api not found in pii routes")
+        window = src_pii[max(0, idx - 400):idx]
+        self.assertIn("rate_limit", window,
+                      "extract_text_api missing @rate_limit decorator")
 
 
 if __name__ == "__main__":
