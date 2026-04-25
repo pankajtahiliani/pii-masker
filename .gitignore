@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# IDE / tools
+.claude/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Secrets / env
+.env
+.env.*
+!.env.example
+
+# Uploads / temp files
+uploads/
+*.tmp
+*.docx.bak
+
+# Code review graph (generated)
+.code-review-graph/
