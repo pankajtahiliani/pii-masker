@@ -18,7 +18,7 @@ git pull origin main || echo "⚠️  git pull failed — running existing code"
 
 # ── 2. Install / upgrade Python deps ─────────────────────────────────────────
 echo "=== Installing dependencies ==="
-pip install -q -r "${REPO_DIR}/requirements.txt"
+pip install -q --ignore-installed -r "${REPO_DIR}/requirements.txt"
 
 # ── 3. Ensure model directory exists ─────────────────────────────────────────
 mkdir -p "${MODEL_DIR}"
