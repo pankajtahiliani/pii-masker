@@ -20,14 +20,32 @@ git pull origin main || echo "⚠️  git pull failed — running existing code"
 echo "=== Installing dependencies ==="
 pip install -q --ignore-installed -r "${REPO_DIR}/requirements.txt"
 
-# ── 3. Ensure model directory exists ─────────────────────────────────────────
+# ── 3. Install llama-server if missing ───────────────────────────────────────
+if ! command -v llama-server &>/dev/null; then
+    echo "=== Building llama-server (CUDA) — ~15 min first time ==="
+    apt-get update -qq && apt-get install -y -qq cmake build-essential
+    cd /tmp
+    rm -rf llama.cpp
+    git clone --depth 1 https://github.com/ggerganov/llama.cpp
+    cd llama.cpp
+    cmake -B build -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release
+    cmake --build build --config Release -j$(nproc)
+    cp build/bin/llama-server /usr/local/bin/
+    chmod +x /usr/local/bin/llama-server
+    echo "llama-server installed ✓"
+    cd "${REPO_DIR}"
+else
+    echo "llama-server already installed ✓"
+fi
+
+# ── 4. Ensure model directory exists ─────────────────────────────────────────
 mkdir -p "${MODEL_DIR}"
 
 # ── 4. Download model if missing ─────────────────────────────────────────────
 if [ ! -f "${MODEL_PATH}" ]; then
     echo "=== Downloading Qwen2.5 7B Q4 model (~4.5 GB) ==="
-    wget -q --show-progress \
-        "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf" \
+    wget --show-progress \
+        "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q3_k_m.gguf" \
         -O "${MODEL_PATH}"
     echo "Model downloaded ✓"
 else
