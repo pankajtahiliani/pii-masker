@@ -138,27 +138,73 @@ CONTEXT_LABELS = {
 }
 
 # ── Proper name detection ─────────────────────────────────────────────────────
+# NOTE: The broad two-word pattern is intentionally removed.
+# "Job Seeker", "Home Page", "Easy Apply" etc. all match [A-Z][a-z]+ [A-Z][a-z]+
+# causing catastrophic false positives in business/technical documents.
+# Safe name detection: salutation-prefixed only + 3-word names.
 NAME_PATTERNS = [
     r'\b(?:Mr|Mrs|Ms|Miss|Dr|Prof|Sir|Dame|Rev|Hon|Capt|Maj|Col|Gen|Sgt|Fr|Sr|Br)\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3}\b',
     r'\b[A-Z][a-z]{1,20}\s+[A-Z][a-z]{1,20}\s+[A-Z][a-z]{1,20}\b',
-    r'\b[A-Z][a-z]{1,20}\s+[A-Z][a-z]{1,20}\b',
 ]
 
 NOT_NAMES = {
+    # Job titles / roles
     'Business','Analyst','Product','Owner','Technical','Architect','Scrum','Master',
     'DevOps','Engineer','Finance','Director','Manager','Senior','Junior','Lead','Head',
     'Chief','Vice','President','Officer','Associate','Consultant','Specialist','Executive',
     'Administrator','Coordinator','Supervisor','Inspector','Controller','Partner',
+    # Document structure
     'Software','Requirements','Specification','Document','Control','Overview','Background',
     'Objective','Scope','Summary','Revision','History','Contents','Section','Heading',
     'Appendix','Annex','Version','Status','Draft','Final','Initial','Approved','Signed',
+    # Auth / access
     'Access','Level','Default','Password','Username','Login','Logout','Register','Reset',
     'Primary','Secondary','Alternate','Optional','Mandatory','Required','Recommended',
     'Encrypted','Hashed','Masked','Redacted','Restricted','Confidential','Public',
+    # Tech infrastructure
     'Module','System','Platform','Service','Gateway','Bucket','Token','Secret','Key',
     'Environment','Development','Production','Staging','Testing','Integration','Deployment',
     'Backend','Frontend','Database','Server','Client','Infrastructure','Architecture',
     'Application','Interface','Dashboard','Report','Analytics','Pipeline','Workflow',
+    'Redis','Next','React','Angular','Vue','Docker','Kubernetes','Nginx','Gunicorn',
+    'Postgres','Mysql','Mongodb','Elasticsearch','Rabbitmq','Celery','Django','Flask',
+    'Webpack','Tailwind','Bootstrap','Typescript','Javascript','Python','Node',
+    'Lambda','Cloudfront','Cloudflare','Vercel','Heroku','Netlify','Firebase',
+    'Stripe','Twilio','Sendgrid','Mailgun','Postmark','Intercom','Zendesk',
+    # UI / feature labels (the main false-positive source)
+    'Home','Page','Pages','View','Views','Screen','Screens','Panel','Panels',
+    'Job','Jobs','Seeker','Seekers','Portal','Listing','Listings','Detail','Details',
+    'Resume','Builder','Upload','Download','Preview','Scoring','Tailoring',
+    'Search','Bar','Filter','Filters','Sort','Apply','Application','Applications',
+    'Match','Matches','Matching','Score','Scores','Smart','Easy','Quick',
+    'Profile','Profiles','Photo','Picture','Settings','Preferences',
+    'Activity','Feed','Notification','Notifications','Alert','Alerts',
+    'Welcome','Navigation','Sticky','Breadcrumb','Footer','Header','Sidebar',
+    'Button','Buttons','Card','Cards','Modal','Popup','Tooltip','Badge',
+    'Table','Tables','Form','Forms','Input','Inputs','Dropdown','Checkbox',
+    'Saved','Bookmark','Bookmarks','Favourite','Favourites','Wishlist',
+    'Newsletter','Subscription','Banner','Hero','Carousel','Slider',
+    'Management','Admin','Panel','Console','Control','Center',
+    'Performance','Optimization','Rendering','Loading','Speed','Cache',
+    'Server','Side','Client','Static','Dynamic','Real','Time','Live',
+    'Push','Pull','Sync','Async','Batch','Queue','Stream','Webhook',
+    'Error','Handling','Logging','Monitoring','Alerting','Tracing',
+    'Feature','Flags','Toggle','Experiment','Rollout','Release',
+    'Data','Flow','Parsing','Normalization','Validation','Transformation',
+    'Cloud','Storage','Delivery','Network','Content','Distribution',
+    'Natural','Language','Processing','Machine','Learning','Artificial','Intelligence',
+    'User','Users','Account','Accounts','Role','Roles','Permission','Permissions',
+    'Privacy','Security','Assessment','Compliance','Audit','Risk',
+    'Independent','Assurance','Expertise','Outcomes','Unified',
+    'Monthly','Recurring','Revenue','Annual','Quarterly','Weekly',
+    'Cost','Analysis','Estimate','Budget','Pricing','Price','Plan','Plans',
+    'About','Contact','Team','Company','Brand','Brands','Partner','Partners',
+    'Global','Local','Regional','International','Enterprise','Startup',
+    'Web','Mobile','Desktop','App','Apps','Site','Sites','Portal','Portals',
+    'Api','Rest','Graphql','Websocket','Webhook','Microservice','Monolith',
+    'Powered','Based','Driven','Enabled','Ready','Friendly','First',
+    'Cross','Site','Scripting','Injection','Forgery','Request','Response',
+    # Countries / regions
     'Australia','United','Kingdom','States','America','Canada','Singapore','Emirates',
     'India','Pakistan','Bangladesh','Sri','Lanka','Nepal','Bhutan','Maldives',
     'New','South','Wales','Victoria','Queensland','Western','Northern','Territory',
@@ -169,21 +215,26 @@ NOT_NAMES = {
     'California','Texas','Florida','York','Jersey','Hampshire','Mexico','Orleans',
     'Pradesh','Rajasthan','Maharashtra','Karnataka','Kerala','Gujarat','Bihar',
     'Uttar','Madhya','Himachal','Jammu','Kashmir','Uttarakhand','Jharkhand',
+    # Address components
     'Street','Avenue','Road','Boulevard','Lane','Drive','Court','Place','Way',
     'Terrace','Close','Crescent','Highway','Parade','Circuit','Grove','Gardens',
     'Sector','Floor','Plot','Flat','Apartment','Suite','Block','Wing','Tower',
     'Phase','Nagar','Marg','Chowk','Colony','Layout','Extension','Enclave',
+    # Time / calendar
     'January','February','March','April','June','July','August','September',
     'October','November','December','Monday','Tuesday','Wednesday','Thursday',
     'Friday','Saturday','Sunday','Today','Tomorrow','Yesterday',
+    # Generic doc / business words
     'Customer','Employee','Team','Register','Legal','Billing','Contract','Reference',
-    'Project','Platform','Services','Super','Admin','Backend','Frontend',
+    'Project','Platform','Services','Super','Admin',
     'Third','Party','Payment','Maps','Documents','Sign','Signature','Approval',
     'Review','Change','Full','Name','Mobile','Phone','Role','Gender','Birth',
-    'Field','Type','Notes','Format','Generated','Deployment','Token','Service',
+    'Field','Type','Notes','Format','Generated','Token',
     'Male','Female','Other','True','False','None','Null','Yes','No','Not',
-    'Available','Applicable','Provided','Contact','Details','Information',
-    'Account','Number','Reference','Code','Serial','Batch','Order','Invoice',
+    'Available','Applicable','Provided','Contact','Information',
+    'Number','Code','Serial','Batch','Order','Invoice',
+    'Actively','Looking','Actively','Only','Agency','Independent',
+    'Dotsquares','Goallsecure','Allsecure',
 }
 
 # ── Fix 1 & 2: Safe value guards ─────────────────────────────────────────────

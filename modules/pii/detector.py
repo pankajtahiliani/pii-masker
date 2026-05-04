@@ -130,9 +130,15 @@ def detect_pii_with_llm(text: str, model: str) -> list:
     Uses _LLAMA_SESSION connection pool (was using requests.post directly — bug fix).
     """
     prompt = (
-        "PII detector. Find: full names, usernames, physical addresses, gender. "
+        "You are a PII detector for business and technical documents. "
+        "Find ONLY real personal data: actual human names (not feature names, not UI labels, not product names), "
+        "physical street addresses, and system usernames (like john_doe). "
+        "DO NOT flag: feature names (Job Seeker, Home Page, Easy Apply), "
+        "company names, technology names, section headings, or any capitalized business terms. "
+        "A real name must be a person's actual name (e.g. John Smith, Priya Patel). "
         "Return ONLY a JSON array. Each item: "
-        '{"text": "exact string", "type": "name|username|address|gender"}\n\n'
+        '{"text": "exact string from text", "type": "name|username|address"}\n'
+        "If no real PII found, return []\n\n"
         f"TEXT:\n{text}\n\nJSON:"
     )
     try:
